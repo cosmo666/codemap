@@ -12,6 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 
+from codemap.analyzer.graph import GraphData
 from codemap.api.chat import CHAT_SYSTEM_PROMPT, build_context, extract_new_citations
 from codemap.config import Settings
 from codemap.indexer.index import VectorIndex
@@ -51,7 +52,7 @@ def _prune_finished_analyses(
 ) -> None:
     """Evict the oldest DONE runs beyond `keep`; unfinished runs are never touched."""
     done_ids = [analysis_id for analysis_id, run in analyses.items() if run.done]
-    excess = len(done_ids) - keep
+    excess = max(0, len(done_ids) - keep)
     for analysis_id in done_ids[:excess]:
         del analyses[analysis_id]
 
@@ -85,16 +86,20 @@ def create_app(
 
         # Warm-start: if this repo was analyzed before, serve the persisted graph/index
         # immediately so the UI has data while the fresh analysis runs in the background.
-        store = Store(repo)
-        graph = store.load_graph()
-        if graph is not None and (store.dir / "index.faiss").exists():
-            try:
-                index = await asyncio.to_thread(VectorIndex.load, store.dir)
-            except Exception as exc:  # noqa: BLE001 - warm-start is best-effort
-                log.warning("warm_start_failed", error=str(exc))
-            else:
-                app.state.graph = graph
-                app.state.index = index
+        def load_persisted() -> tuple[GraphData, VectorIndex] | None:
+            store = Store(repo)
+            graph = store.load_graph()
+            if graph is None or not (store.dir / "index.faiss").exists():
+                return None
+            return graph, VectorIndex.load(store.dir)
+
+        try:
+            persisted = await asyncio.to_thread(load_persisted)
+        except Exception as exc:  # noqa: BLE001 - warm-start is best-effort
+            log.warning("warm_start_failed", error=str(exc))
+        else:
+            if persisted is not None:
+                app.state.graph, app.state.index = persisted
 
         analysis_id = uuid.uuid4().hex[:12]
         run = AnalysisRun()

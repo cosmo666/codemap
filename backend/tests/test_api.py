@@ -78,6 +78,28 @@ async def test_warm_start_serves_persisted_graph_immediately(repo: Path) -> None
         assert len(graph["nodes"]) == 10
 
 
+async def test_warm_start_survives_corrupt_artifacts(repo: Path) -> None:
+    # A corrupted graph.json must not 500 the POST; analysis proceeds fresh.
+    codemap_dir = repo / ".codemap"
+    codemap_dir.mkdir()
+    (codemap_dir / "graph.json").write_bytes(b"\x00 not json at all {{{")
+    client, app = make_client()
+    async with client:
+        response = await client.post("/analyze", json={"repo_path": str(repo)})
+        assert response.status_code == 200
+        analysis_id = response.json()["analysis_id"]
+
+        for _ in range(100):
+            if app.state.analyses[analysis_id].done:
+                break
+            await asyncio.sleep(0.05)
+        assert app.state.analyses[analysis_id].done
+
+        graph = await client.get("/graph")
+        assert graph.status_code == 200
+        assert len(graph.json()["nodes"]) == 10
+
+
 async def test_analyze_missing_path() -> None:
     client, _ = make_client()
     async with client:
@@ -125,6 +147,33 @@ async def test_evicts_old_done_analyses(repo: Path) -> None:
                 break
             await asyncio.sleep(0.05)
         assert app.state.analyses[analysis_id].done
+
+
+async def test_no_eviction_below_done_cap(repo: Path) -> None:
+    # Under the cap (5), pruning must evict NOTHING — guards against a negative-slice
+    # bug where done_ids[:-excess] with negative excess evicts from the front.
+    client, app = make_client()
+    async with client:
+        for i in range(3):
+            app.state.analyses[f"fake-{i}"] = AnalysisRun(done=True)
+
+        first_id = (
+            await client.post("/analyze", json={"repo_path": str(repo)})
+        ).json()["analysis_id"]
+        fake_ids = [aid for aid in app.state.analyses if aid.startswith("fake-")]
+        assert fake_ids == ["fake-0", "fake-1", "fake-2"]  # 3 done < cap: none evicted
+
+        for _ in range(100):
+            if app.state.analyses[first_id].done:
+                break
+            await asyncio.sleep(0.05)
+        assert app.state.analyses[first_id].done
+
+        # Now 4 done runs (3 fakes + the finished real one) — still under the cap.
+        await client.post("/analyze", json={"repo_path": str(repo)})
+        fake_ids = [aid for aid in app.state.analyses if aid.startswith("fake-")]
+        assert fake_ids == ["fake-0", "fake-1", "fake-2"]  # 4 done < cap: none evicted
+        assert first_id in app.state.analyses
 
 
 async def test_analyze_events_stream_and_404s(repo: Path) -> None:
