@@ -150,6 +150,7 @@ def test_c_quoted_includes_only() -> None:
     assert info.imports == ["c.src.util.strings.h"]  # <stdio.h>-style never resolves
     assert [f.name for f in info.functions] == ["main"]
     header = _parse("c", "src", "util", "strings.h").info
+    assert header.language == "c"  # plain-C .h stays on the C grammar
     assert [c.name for c in header.classes] == ["counted"]
     assert header.classes[0].docstring == "A counted string."
 
@@ -170,7 +171,23 @@ def test_cpp_class_with_inline_method() -> None:
     main = _parse("cpp", "main.cpp").info
     assert main.imports == ["cpp.geometry.hpp"]
     assert [f.name for f in main.functions] == ["doubled", "main"]
-    assert _edges("cpp/") == {("cpp/main.cpp", "cpp/geometry.hpp")}
+    assert _edges("cpp/") == {
+        ("cpp/main.cpp", "cpp/geometry.hpp"),
+        ("cpp/widget.h", "cpp/geometry.hpp"),
+    }
+
+
+def test_cpp_header_with_h_extension_retries_cpp_grammar() -> None:
+    # .h maps to the C grammar first; a C++-style header (namespace/class) must
+    # be retried under the C++ grammar instead of degrading to parse_error.
+    info = _parse("cpp", "widget.h").info
+    assert info.language == "cpp"
+    assert info.imports == ["cpp.geometry.hpp"]
+    assert [c.name for c in info.classes] == ["Widget"]
+    cls = info.classes[0]
+    assert cls.docstring == "A widget that wraps a rectangle."
+    assert [m.name for m in cls.methods] == ["size"]
+    assert cls.methods[0].docstring == "Number of rectangles tracked."
 
 
 # --- Ruby ----------------------------------------------------------------------

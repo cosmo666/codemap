@@ -7,19 +7,43 @@ from typing import cast
 from tree_sitter import Language, Node, Parser, Query, QueryCursor
 from tree_sitter_language_pack import SupportedLanguage, get_language
 
-from codemap.analyzer.languages import EXT_TO_LANGUAGE, LanguageSpec
+from codemap.analyzer.languages import (
+    EXT_TO_LANGUAGE,
+    GRAMMAR_FALLBACKS,
+    LanguageSpec,
+    path_module_name,
+)
 from codemap.analyzer.models import ClassInfo, FunctionInfo, ModuleInfo, ParsedModule
 
 _SKIP_DIRS = {"__pycache__", "node_modules", ".codemap", "venv"}
 _MAX_FILE_BYTES = 1_572_864  # 1.5 MB: anything larger is generated or vendored
+_TEXT_PROBE_BYTES = 8192
+
+
+def _is_texty(path: Path) -> bool:
+    """Cheap binary probe for the raw-fallback tier: no NUL bytes and valid
+    UTF-8 (modulo a multi-byte sequence cut at the probe boundary)."""
+    try:
+        with path.open("rb") as fh:
+            sample = fh.read(_TEXT_PROBE_BYTES)
+    except OSError:
+        return False
+    if b"\x00" in sample:
+        return False
+    try:
+        sample.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        return exc.start >= len(sample) - 3
+    return True
 
 
 def discover_source_files(repo: Path) -> list[Path]:
-    """Every registered-language file in the repo, minus junk dirs, minified
-    bundles, and oversized files."""
+    """Every source file in the repo, minus junk dirs, minified bundles,
+    oversized files, and unregistered binary files. Files whose extension is
+    not registered still become raw-fallback nodes as long as they look texty."""
     files: list[Path] = []
     for path in sorted(repo.rglob("*")):
-        if not path.is_file() or path.suffix.lower() not in EXT_TO_LANGUAGE:
+        if not path.is_file():
             continue
         rel_parts = path.relative_to(repo).parts
         if any(p in _SKIP_DIRS or p.startswith(".") for p in rel_parts):
@@ -28,6 +52,8 @@ def discover_source_files(repo: Path) -> list[Path]:
         if len(suffixes) >= 2 and suffixes[-2] == ".min":
             continue
         if path.stat().st_size > _MAX_FILE_BYTES:
+            continue
+        if path.suffix.lower() not in EXT_TO_LANGUAGE and not _is_texty(path):
             continue
         files.append(path)
     return files
@@ -324,6 +350,17 @@ def _parse_with_treesitter(
         lines = source.splitlines()
         if spec.tier == "deep":
             if tree.root_node.has_error:
+                fallback = GRAMMAR_FALLBACKS.get(file.suffix.lower())
+                if fallback is not None and fallback is not spec:
+                    retried = _parse_with_treesitter(
+                        fallback,
+                        repo,
+                        file,
+                        source,
+                        base.model_copy(update={"language": fallback.name}),
+                    )
+                    if retried.status == "ok":
+                        return retried
                 return base.model_copy(update={"status": "parse_error"})
             classes, functions = _ts_symbols(spec, tree.root_node, lines)
             return base.model_copy(
@@ -342,11 +379,19 @@ def _parse_with_treesitter(
 def parse_module(repo: Path, file: Path) -> ParsedModule:
     rel = file.relative_to(repo)
     parts = rel.parts
-    spec = EXT_TO_LANGUAGE[file.suffix.lower()]
+    spec = EXT_TO_LANGUAGE.get(file.suffix.lower())
     source = file.read_text(encoding="utf-8", errors="replace")
+    if spec is None:
+        # Raw fallback: unregistered-but-texty file. The extension stays in the
+        # module name so raw nodes never collide with real language modules.
+        module = path_module_name(repo, file)
+        language = file.suffix.lower().lstrip(".") or "text"
+    else:
+        module = spec.module_name(repo, file)
+        language = spec.name
     base = ModuleInfo(
         path=rel.as_posix(),
-        module=spec.module_name(repo, file),
+        module=module,
         package=parts[0] if len(parts) > 1 else "root",
         imports=[],
         classes=[],
@@ -354,9 +399,11 @@ def parse_module(repo: Path, file: Path) -> ParsedModule:
         docstring=None,
         loc=source.count("\n") + 1,
         status="ok",
-        language=spec.name,
+        language=language,
     )
-    if spec.name == "python":
+    if spec is None:
+        info = base  # raw node: no symbols, no edges, status stays ok
+    elif spec.name == "python":
         info = _parse_python(base, source, is_package=file.name == "__init__.py")
     else:
         info = _parse_with_treesitter(spec, repo, file, source, base)
@@ -364,4 +411,8 @@ def parse_module(repo: Path, file: Path) -> ParsedModule:
 
 
 def parse_repo(repo: Path) -> list[ParsedModule]:
+    # Import resolvers compare .resolve()d target paths against this root; an
+    # unresolved (relative, symlinked) repo would make relative_to() blow up
+    # downstream and silently mark valid files as parse_error.
+    repo = repo.resolve()
     return [parse_module(repo, f) for f in discover_source_files(repo)]

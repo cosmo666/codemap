@@ -80,7 +80,9 @@ def create_app(
 
     @app.post("/analyze")
     async def analyze(request: AnalyzeRequest) -> dict[str, str]:
-        repo = Path(request.repo_path)
+        # Canonicalize the free-text path once at the boundary so the Store's
+        # .codemap directory, warm-start lookup, and parsing all agree.
+        repo = Path(request.repo_path).resolve()
         if not repo.is_dir():
             raise HTTPException(status_code=404, detail=f"Not a directory: {repo}")
 

@@ -30,18 +30,23 @@ class GraphData(BaseModel):
     overview: str | None = None
 
 
-def _resolve_target(imported: str, by_module: dict[str, str]) -> str | None:
-    """Resolve a dotted import to a known module path, trying longest prefix first."""
+def _resolve_target(imported: str, by_module: dict[str, list[str]]) -> str | None:
+    """Resolve a dotted import to a known module path, trying longest prefix
+    first. A module name claimed by several files (e.g. svc/bar.py and
+    svc/bar.rb both mapping to "svc.bar") is ambiguous: skip it and keep
+    trying shorter prefixes rather than guessing the wrong target."""
     parts = imported.split(".")
     for end in range(len(parts), 0, -1):
-        candidate = ".".join(parts[:end])
-        if candidate in by_module:
-            return by_module[candidate]
+        paths = by_module.get(".".join(parts[:end]))
+        if paths is not None and len(paths) == 1:
+            return paths[0]
     return None
 
 
 def build_graph(parsed: list[ParsedModule]) -> GraphData:
-    by_module = {p.info.module: p.info.path for p in parsed}
+    by_module: dict[str, list[str]] = {}
+    for p in parsed:
+        by_module.setdefault(p.info.module, []).append(p.info.path)
     g = nx.DiGraph()
     g.add_nodes_from(p.info.path for p in parsed)
     edges: list[GraphEdge] = []

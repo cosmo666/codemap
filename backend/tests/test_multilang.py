@@ -2,6 +2,9 @@ import shutil
 from pathlib import Path
 from typing import Any
 
+import pytest
+
+from codemap.analyzer import parser as parser_mod
 from codemap.analyzer.graph import GraphNode, build_graph
 from codemap.analyzer.models import ModuleInfo
 from codemap.analyzer.parser import (
@@ -33,9 +36,11 @@ def test_discover_source_files_polyglot() -> None:
             "c/src/util/strings.h",
             "cpp/geometry.hpp",
             "cpp/main.cpp",
+            "cpp/widget.h",
             "csharp/Acme/App/Program.cs",
             "csharp/Acme/Util/Strings.cs",
-            "go/main.go",  # go.mod itself is not a node
+            "go/go.mod",  # unregistered-but-texty: raw-fallback node
+            "go/main.go",
             "go/util/count.go",
             "go/util/strings.go",
             "java/com/acme/app/Main.java",
@@ -73,6 +78,26 @@ def test_discover_python_files_still_python_only() -> None:
     assert discover_python_files(POLYGLOT) == []
     # demo_repo is all-Python: the generalized walk finds the same files
     assert discover_source_files(DEMO) == discover_python_files(DEMO)
+
+
+def test_unregistered_texty_extensions_become_raw_nodes(tmp_path: Path) -> None:
+    # Spec: every source file becomes a node; unknown-but-texty extensions get
+    # raw-fallback nodes, binary files stay invisible.
+    (tmp_path / "main.py").write_text("x = 1\n")
+    (tmp_path / "README.md").write_text("# Demo\n")
+    (tmp_path / "config.yaml").write_text("key: value\n")
+    (tmp_path / "Dockerfile").write_text("FROM python:3.12\n")
+    (tmp_path / "logo.png").write_bytes(b"\x89PNG\r\n\x1a\n\x00\x00\x01binary")
+    names = sorted(f.name for f in discover_source_files(tmp_path))
+    assert names == ["Dockerfile", "README.md", "config.yaml", "main.py"]
+    info = {p.info.path: p.info for p in parse_repo(tmp_path)}
+    readme = info["README.md"]
+    assert readme.status == "ok"
+    assert readme.language == "md"
+    assert readme.imports == [] and readme.classes == [] and readme.functions == []
+    # extension kept in the module name: raw nodes never collide with real modules
+    assert readme.module == "README.md"
+    assert info["Dockerfile"].language == "text"  # no extension at all
 
 
 # --- deep JS/TS parsing ------------------------------------------------------
@@ -138,19 +163,39 @@ def test_universal_lua_gets_symbols_no_imports() -> None:
     assert greet.lineno == 2 and greet.end_lineno == 4
 
 
+def test_grammar_load_failure_raw_fallback_for_universal_tier(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A missing grammar downgrades a universal-tier file to a raw node
+    # (status stays ok); a deep-tier file becomes parse_error.
+    (tmp_path / "tool.lua").write_text("x = 1\n")
+    (tmp_path / "api.ts").write_text("export const y = 1;\n")
+    monkeypatch.setattr(parser_mod, "_load_language", lambda _name: None)
+    lua = parse_module(tmp_path, tmp_path / "tool.lua").info
+    assert lua.status == "ok"
+    assert lua.language == "lua"
+    assert lua.imports == [] and lua.classes == [] and lua.functions == []
+    ts = parse_module(tmp_path, tmp_path / "api.ts").info
+    assert ts.status == "parse_error"
+
+
 # --- graph edges -------------------------------------------------------------
 
 
 def test_polyglot_graph_edges_exact() -> None:
     graph = build_graph(parse_repo(POLYGLOT))
     by_id = {n.id: n for n in graph.nodes}
-    assert len(graph.nodes) == 25
+    assert len(graph.nodes) == 27
     assert by_id["web/api.ts"].language == "typescript"
     assert by_id["web/util.js"].language == "javascript"
     assert by_id["scripts/tool.lua"].language == "lua"
     assert by_id["web/broken.ts"].status == "parse_error"
     assert by_id["c/src/util/strings.h"].language == "c"
     assert by_id["cpp/geometry.hpp"].language == "cpp"
+    assert by_id["cpp/widget.h"].language == "cpp"  # .h retried under the C++ grammar
+    assert by_id["cpp/widget.h"].status == "ok"
+    assert by_id["go/go.mod"].language == "mod"  # raw-fallback node
+    assert by_id["go/go.mod"].status == "ok"
     edge_set = {(e.source, e.target) for e in graph.edges}
     assert edge_set == {
         # JS/TS
@@ -175,6 +220,7 @@ def test_polyglot_graph_edges_exact() -> None:
         ("c/src/main.c", "c/src/util/strings.h"),
         ("c/src/util/strings.c", "c/src/util/strings.h"),
         ("cpp/main.cpp", "cpp/geometry.hpp"),
+        ("cpp/widget.h", "cpp/geometry.hpp"),
         # Ruby / PHP
         ("ruby/app.rb", "ruby/lib/greeter.rb"),
         ("php/src/index.php", "php/src/Util/Strings.php"),
@@ -211,6 +257,21 @@ def test_python_fixture_language_tagged() -> None:
     parsed = parse_repo(DEMO)
     assert len(parsed) == 10
     assert all(p.info.language == "python" for p in parsed)
+
+
+def test_parse_repo_accepts_relative_repo_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Import resolvers compare .resolve()d targets against the repo root; an
+    # unresolved repo path must not flip valid files to parse_error.
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "util.ts").write_text("export const x = 1;\n")
+    (repo / "api.ts").write_text("import { x } from './util';\nexport const y = x;\n")
+    monkeypatch.chdir(tmp_path)
+    info = {p.info.path: p.info for p in parse_repo(Path("repo"))}
+    assert info["api.ts"].status == "ok"
+    assert info["api.ts"].imports == ["util"]
 
 
 # --- skeleton ----------------------------------------------------------------
@@ -284,4 +345,5 @@ async def test_pipeline_polyglot_end_to_end(tmp_path: Path) -> None:
         "cpp",
         "ruby",
         "php",
+        "mod",  # go.mod: raw-fallback node
     }

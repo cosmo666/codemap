@@ -22,3 +22,13 @@ def test_chunk_module_boundaries() -> None:
 def test_chunk_summaries() -> None:
     chunks = chunk_summaries({"a.py": "does things"})
     assert chunks[0].kind == "summary" and chunks[0].path == "a.py"
+
+
+def test_chunk_module_empty_init_pins_single_whole_file_chunk() -> None:
+    # v1.1 behavior change, pinned deliberately: a zero-symbol file always
+    # yields exactly one raw whole-file chunk — including fully empty
+    # __init__.py files, which produced zero chunks before v1.1.
+    parsed = {p.info.path: p for p in parse_repo(FIXTURE)}
+    chunks = chunk_module(parsed["app/auth/__init__.py"])
+    assert [(c.id, c.kind) for c in chunks] == [("app/auth/__init__.py::module", "module")]
+    assert chunks[0].text == "# app/auth/__init__.py\n"

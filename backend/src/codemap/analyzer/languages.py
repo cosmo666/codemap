@@ -492,6 +492,11 @@ _CPP = LanguageSpec(
     symbol_query=CPP_SYMBOL_QUERY,
     resolve_import=resolve_c_include,
 )
+# The `.h` convention is shared by C and C++. Headers map to the C grammar
+# first; when it rejects one (classes, namespaces, templates), the parser
+# retries with this spec — the C++ grammar is a practical superset of C.
+GRAMMAR_FALLBACKS: dict[str, LanguageSpec] = {".h": _CPP}
+
 _RUBY = LanguageSpec(
     name="ruby",
     ts_language="ruby",

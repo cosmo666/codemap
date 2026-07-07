@@ -100,6 +100,36 @@ async def test_warm_start_survives_corrupt_artifacts(repo: Path) -> None:
         assert len(graph.json()["nodes"]) == 10
 
 
+async def test_analyze_relative_repo_path_resolves(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The UI posts free-text paths verbatim; a relative repo path must not
+    # degrade analysis (unresolved repo vs resolved import targets used to flip
+    # syntactically valid files to parse_error).
+    rel = tmp_path / "rel_repo"
+    rel.mkdir()
+    (rel / "util.ts").write_text("export const x = 1;\n")
+    (rel / "api.ts").write_text("import { x } from './util';\nexport const y = x;\n")
+    monkeypatch.chdir(tmp_path)
+    client, app = make_client()
+    async with client:
+        response = await client.post("/analyze", json={"repo_path": "rel_repo"})
+        assert response.status_code == 200
+        analysis_id = response.json()["analysis_id"]
+        for _ in range(100):
+            if app.state.analyses[analysis_id].done:
+                break
+            await asyncio.sleep(0.05)
+        assert app.state.analyses[analysis_id].done
+        graph = (await client.get("/graph")).json()
+        assert {n["id"]: n["status"] for n in graph["nodes"]} == {
+            "api.ts": "ok",
+            "util.ts": "ok",
+        }
+    # artifacts land under the canonical repo directory
+    assert (rel / ".codemap" / "graph.json").exists()
+
+
 async def test_analyze_missing_path() -> None:
     client, _ = make_client()
     async with client:
