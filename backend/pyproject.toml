@@ -1,0 +1,55 @@
+[project]
+name = "codemap"
+version = "0.1.0"
+description = "Cinematic 3D codebase visualizer with RAG chat"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    "sse-starlette>=2.1",
+    "networkx>=3.4",
+    "openai>=1.55",
+    "fastembed>=0.4",
+    "faiss-cpu>=1.9",
+    "numpy>=1.26",
+    "pydantic>=2.9",
+    "pydantic-settings>=2.6",
+    "structlog>=24.4",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "httpx>=0.27",
+    "mypy>=1.13",
+    "ruff>=0.8",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/codemap"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.mypy]
+strict = true
+mypy_path = "src"
+packages = ["codemap"]
+
+[[tool.mypy.overrides]]
+module = ["faiss", "fastembed", "networkx"]
+ignore_missing_imports = true
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "ANN"]
+ignore = ["ANN401"]
