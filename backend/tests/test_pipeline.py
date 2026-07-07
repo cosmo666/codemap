@@ -22,7 +22,7 @@ def make_settings() -> Settings:
 
 async def test_pipeline_end_to_end(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
-    shutil.copytree(FIXTURE, repo)
+    shutil.copytree(FIXTURE, repo, ignore=shutil.ignore_patterns(".codemap"))
     events: list[PipelineEvent] = []
     llm: Any = FakeLLM()
     pipeline = Pipeline(make_settings(), llm=llm, embed_fn=fake_embed)
@@ -61,7 +61,7 @@ class FailingOverviewLLM(FakeLLM):
 
 async def test_pipeline_overview_failure_yields_none(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
-    shutil.copytree(FIXTURE, repo)
+    shutil.copytree(FIXTURE, repo, ignore=shutil.ignore_patterns(".codemap"))
     llm: Any = FailingOverviewLLM()
     pipeline = Pipeline(make_settings(), llm=llm, embed_fn=fake_embed)
     graph, _index = await pipeline.run(repo, lambda e: None)

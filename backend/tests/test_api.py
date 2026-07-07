@@ -18,7 +18,7 @@ FIXTURE = Path(__file__).parent / "fixtures" / "demo_repo"
 @pytest.fixture
 def repo(tmp_path: Path) -> Path:
     dest = tmp_path / "repo"
-    shutil.copytree(FIXTURE, dest)
+    shutil.copytree(FIXTURE, dest, ignore=shutil.ignore_patterns(".codemap"))
     return dest
 
 

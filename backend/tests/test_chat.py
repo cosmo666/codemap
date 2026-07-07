@@ -50,7 +50,7 @@ class StreamingFakeLLM(FakeLLM):
 
 async def test_chat_streams_tokens_and_citations(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
-    shutil.copytree(FIXTURE, repo)
+    shutil.copytree(FIXTURE, repo, ignore=shutil.ignore_patterns(".codemap"))
     llm: Any = StreamingFakeLLM()
     pipeline = Pipeline(make_settings(), llm=llm, embed_fn=fake_embed)
     app = create_app(settings=make_settings(), pipeline=pipeline, llm=llm)
@@ -93,7 +93,7 @@ class ExplodingStreamLLM(FakeLLM):
 
 async def test_chat_midstream_failure_emits_error_then_done(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
-    shutil.copytree(FIXTURE, repo)
+    shutil.copytree(FIXTURE, repo, ignore=shutil.ignore_patterns(".codemap"))
     llm: Any = ExplodingStreamLLM()
     pipeline = Pipeline(make_settings(), llm=llm, embed_fn=fake_embed)
     app = create_app(settings=make_settings(), pipeline=pipeline, llm=llm)
