@@ -33,12 +33,12 @@ function BrandPlate() {
       {overview && (
         <Tooltip>
           <TooltipTrigger asChild>
-            <p
-              tabIndex={0}
-              className="-mx-2 flex min-h-9 max-w-sm items-center rounded-sm px-2 text-xs text-muted-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            <button
+              type="button"
+              className="-mx-2 flex min-h-9 max-w-sm items-center rounded-sm px-2 text-left text-xs text-muted-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
             >
               <span className="min-w-0 truncate">{overview}</span>
-            </p>
+            </button>
           </TooltipTrigger>
           <TooltipContent side="bottom" align="start">
             {overview}

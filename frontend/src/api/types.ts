@@ -45,3 +45,23 @@ export type ChatEvent =
   | { type: 'citation'; path: string }
   | { type: 'error'; detail: string }
   | { type: 'done' };
+
+export interface RecentEntry {
+  repo_path: string;
+  name: string;
+  analyzed_at: string;
+  modules: number;
+  packages: number;
+  languages: string[];
+}
+
+export interface FsDirEntry {
+  name: string;
+  path: string;
+}
+
+export interface FsListing {
+  path: string;
+  parent: string | null;
+  dirs: FsDirEntry[];
+}

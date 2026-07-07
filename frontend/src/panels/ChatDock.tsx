@@ -79,7 +79,7 @@ export default function ChatDock() {
   return (
     <Card
       ref={rootRef}
-      className="fixed bottom-4 left-4 z-20 flex max-h-[60vh] w-110 flex-col overflow-hidden rounded-lg shadow-2xl shadow-black/50 motion-safe:animate-panel-in"
+      className="fixed bottom-4 left-4 z-20 flex max-h-[60vh] w-110 flex-col overflow-hidden shadow-2xl shadow-black/50 motion-safe:animate-panel-in"
     >
       <header className="flex items-center justify-between border-b border-border px-4 py-2.5">
         <h2 className="font-display text-[11px] tracking-[0.2em] uppercase text-muted-foreground">

@@ -62,6 +62,8 @@
 
   --animate-panel-in: panel-in 200ms ease-out both;
   --animate-panel-in-right: panel-in-right 200ms ease-out both;
+  --animate-drift-a: drift-a 120s linear infinite;
+  --animate-drift-b: drift-b 180s linear infinite;
 
   @keyframes panel-in {
     from {
@@ -84,6 +86,28 @@
       transform: translateX(0);
     }
   }
+
+  /* Ambient teaser drift for the welcome hero's starfield layers — two very
+     slow, independent loops so the background reads as alive without ever
+     drawing the eye. motion-safe: gates both; reduced-motion below is a
+     second, blanket safety net. */
+  @keyframes drift-a {
+    from {
+      background-position: 0 0;
+    }
+    to {
+      background-position: -220px 220px;
+    }
+  }
+
+  @keyframes drift-b {
+    from {
+      background-position: 95px 155px;
+    }
+    to {
+      background-position: -245px -125px;
+    }
+  }
 }
 
 @layer base {
@@ -101,13 +125,17 @@
     @apply overflow-hidden bg-background font-sans text-foreground antialiased;
   }
 
-  /* The motion-safe: keyframes already gate themselves; this suppresses the
-     remaining hover/focus transitions for OS-level reduced-motion users. */
+  /* The motion-safe: keyframes already gate themselves; this is the blanket
+     second gate — every transition and animation (including any that slip in
+     unqualified) collapses to effectively-instant for OS-level
+     reduced-motion users. */
   @media (prefers-reduced-motion: reduce) {
     *,
     *::before,
     *::after {
       transition-duration: 0.01ms !important;
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
     }
   }
 }
@@ -125,4 +153,37 @@
   background-position:
     0 0,
     95px 155px;
+}
+
+/* Ambient teaser layers for the welcome hero: two more dot grids, absolutely
+   positioned behind the content and drifting independently (see
+   --animate-drift-a/-b above) — the same background-image technique as
+   .starfield, just split into separate elements so each can animate its own
+   background-position. Zero JS, zero three.js. */
+.starfield-layer {
+  position: absolute;
+  inset: -10%;
+  pointer-events: none;
+}
+
+.starfield-layer-a {
+  background-image: radial-gradient(circle, rgba(226, 232, 247, 0.22) 1px, transparent 1.6px);
+  background-size: 220px 220px;
+}
+
+.starfield-layer-b {
+  background-image: radial-gradient(circle, rgba(125, 211, 252, 0.15) 1px, transparent 1.6px);
+  background-size: 340px 340px;
+}
+
+/* Truncates from the start of the string (ellipsis on the left) so a long
+   filesystem path reads with its most-specific segment visible — used by the
+   folder browser's current-path readout. */
+.truncate-start {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  direction: rtl;
+  text-align: left;
+  unicode-bidi: plaintext;
 }

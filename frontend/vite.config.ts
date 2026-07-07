@@ -18,6 +18,8 @@ export default defineConfig({
       '/graph': backend,
       '/module': backend,
       '/chat': backend,
+      '/recent': backend,
+      '/fs': backend,
     },
   },
 });

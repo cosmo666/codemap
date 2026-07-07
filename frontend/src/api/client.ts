@@ -1,4 +1,12 @@
-import type { ChatEvent, ChatMessage, GraphData, ModuleDetail, PipelineEvent } from './types';
+import type {
+  ChatEvent,
+  ChatMessage,
+  FsListing,
+  GraphData,
+  ModuleDetail,
+  PipelineEvent,
+  RecentEntry,
+} from './types';
 
 async function json<T>(response: Response): Promise<T> {
   if (!response.ok) throw new Error(`${response.status}: ${await response.text()}`);
@@ -6,6 +14,14 @@ async function json<T>(response: Response): Promise<T> {
 }
 
 export const fetchGraph = (): Promise<GraphData> => fetch('/graph').then((r) => json<GraphData>(r));
+
+export const fetchRecents = (): Promise<RecentEntry[]> =>
+  fetch('/recent')
+    .then((r) => json<{ recents: RecentEntry[] }>(r))
+    .then((body) => body.recents);
+
+export const fetchFs = (path?: string): Promise<FsListing> =>
+  fetch(`/fs${path ? `?path=${encodeURIComponent(path)}` : ''}`).then((r) => json<FsListing>(r));
 
 // Encode per-segment (not the whole path) so slashes survive: the backend route is
 // `{path:path}`, and while Starlette decodes %2F there, proxies in front of it (e.g.
