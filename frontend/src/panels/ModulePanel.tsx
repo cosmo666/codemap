@@ -1,9 +1,10 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { X } from 'lucide-react';
 import { fetchModule } from '../api/client';
 import type { ModuleDetail } from '../api/types';
 import { useStore } from '../store/store';
+import { ModuleChip } from '../components/ModuleChip';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -26,13 +27,7 @@ function ChipList({ paths, onFly }: { paths: string[]; onFly: (path: string) => 
     <ul className="flex flex-wrap gap-1.5">
       {paths.map((path) => (
         <li key={path} className="max-w-full">
-          <button
-            type="button"
-            onClick={() => onFly(path)}
-            className="inline-flex h-9 max-w-full items-center rounded-md border border-border bg-background/40 px-2.5 font-mono text-xs text-muted-foreground transition-colors outline-none hover:border-primary hover:text-primary focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
-          >
-            <span className="truncate">{path}</span>
-          </button>
+          <ModuleChip path={path} onFly={onFly} />
         </li>
       ))}
     </ul>
@@ -46,6 +41,10 @@ export default function ModulePanel() {
   const select = useStore((s) => s.select);
   const [detail, setDetail] = useState<ModuleDetail | null>(null);
   const panelRef = useRef<HTMLElement>(null);
+  // The element that had focus when the panel opened, so closing can return
+  // focus to it instead of letting the unmounted <aside> drop focus on <body>.
+  const lastTriggerRef = useRef<HTMLElement | null>(null);
+  const wasOpenRef = useRef(false);
 
   useEffect(() => {
     if (!selectedId) return;
@@ -62,20 +61,38 @@ export default function ModulePanel() {
     };
   }, [selectedId]);
 
-  // Move focus into the panel when it opens (and when the selection changes).
+  // Move focus into the panel when it opens (and when the selection changes),
+  // capturing the opener first — but only on open, not when the selection moves
+  // while the panel is already up (activeElement would then be inside the panel).
   useEffect(() => {
+    if (selectedId && !wasOpenRef.current) {
+      lastTriggerRef.current = document.activeElement as HTMLElement | null;
+    }
+    wasOpenRef.current = Boolean(selectedId);
     if (selectedId) panelRef.current?.focus();
   }, [selectedId]);
+
+  const close = useCallback(() => {
+    select(null);
+    const trigger = lastTriggerRef.current;
+    if (trigger && trigger !== document.body && document.contains(trigger)) {
+      trigger.focus();
+    } else {
+      // Opener gone or focus was never on an element (e.g. a canvas click):
+      // land on the chat input rather than letting focus fall to <body>.
+      document.querySelector<HTMLElement>('[data-slot="input"]')?.focus();
+    }
+  }, [select]);
 
   // Escape closes the panel.
   useEffect(() => {
     if (!selectedId) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') select(null);
+      if (e.key === 'Escape') close();
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [selectedId, select]);
+  }, [selectedId, close]);
 
   if (!selectedId) return null;
 
@@ -96,7 +113,7 @@ export default function ModulePanel() {
         {/* Designation plate — the star-catalog entry for the selected module. */}
         <div className="flex min-w-0 flex-col gap-1.5">
           <p className="font-display text-[11px] tracking-[0.2em] uppercase text-muted-foreground">
-            MODULE — {node?.package ?? 'unknown'}
+            MODULE — <span className="text-violet">{node?.package ?? 'unknown'}</span>
           </p>
           <h2
             title={node?.module ?? selectedId}
@@ -117,12 +134,7 @@ export default function ModulePanel() {
             </Badge>
           )}
         </div>
-        <Button
-          variant="ghost"
-          size="icon"
-          aria-label="Close module panel"
-          onClick={() => select(null)}
-        >
+        <Button variant="ghost" size="icon" aria-label="Close module panel" onClick={close}>
           <X />
         </Button>
       </header>

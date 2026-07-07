@@ -56,6 +56,10 @@
   --radius-lg: var(--radius);
   --radius-xl: calc(var(--radius) + 4px);
 
+  /* Every unqualified transition-* utility (Button, Badge, Input, chips, …)
+     resolves to the same quiet 200ms used by the panel-in animations. */
+  --default-transition-duration: 200ms;
+
   --animate-panel-in: panel-in 200ms ease-out both;
   --animate-panel-in-right: panel-in-right 200ms ease-out both;
 
@@ -95,6 +99,16 @@
 
   body {
     @apply overflow-hidden bg-background font-sans text-foreground antialiased;
+  }
+
+  /* The motion-safe: keyframes already gate themselves; this suppresses the
+     remaining hover/focus transitions for OS-level reduced-motion users. */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      transition-duration: 0.01ms !important;
+    }
   }
 }
 

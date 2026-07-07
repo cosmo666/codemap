@@ -44,6 +44,13 @@ export default function GraphScene() {
   const flyTarget = useStore((s) => s.flyTarget);
   const select = useStore((s) => s.select);
   const flyTo = useStore((s) => s.flyTo);
+  // Tailwind's motion-safe: variant can't reach this imperative three.js code,
+  // so the reduced-motion preference is checked here and gates the orbit,
+  // camera flights, and link particles below.
+  const reduceMotion = useMemo(
+    () => window.matchMedia('(prefers-reduced-motion: reduce)').matches,
+    [],
+  );
 
   const data = useMemo((): { nodes: SceneNode[]; links: SceneLink[] } => {
     if (!graph) return { nodes: [], links: [] };
@@ -81,28 +88,36 @@ export default function GraphScene() {
     fg.postProcessingComposer().addPass(bloom);
     const starfield = makeStarfield();
     fg.scene().add(starfield);
-    // slow orbital establishing shot
-    let angle = 0;
-    const orbit = setInterval(() => {
-      if (engaged.current || useStore.getState().selectedId) {
-        engaged.current = true; // latch off permanently at first selection
-        return;
-      }
-      angle += 0.002;
-      fg.cameraPosition({ x: 420 * Math.sin(angle), y: 60, z: 420 * Math.cos(angle) });
-    }, 40);
+    // Slow orbital establishing shot. Reduced-motion users get the fixed
+    // default framing instead of an auto-playing camera move; everyone else
+    // can stop the orbit at any time (WCAG 2.2.2) — any pointer interaction
+    // with the scene, or selecting a module, latches it off permanently.
+    let orbit: ReturnType<typeof setInterval> | undefined;
+    if (reduceMotion) {
+      fg.cameraPosition({ x: 0, y: 60, z: 420 });
+    } else {
+      let angle = 0;
+      orbit = setInterval(() => {
+        if (engaged.current || useStore.getState().selectedId) {
+          engaged.current = true; // latch off permanently at first selection
+          return;
+        }
+        angle += 0.002;
+        fg.cameraPosition({ x: 420 * Math.sin(angle), y: 60, z: 420 * Math.cos(angle) });
+      }, 40);
+    }
     // Fully undo the scene additions: under StrictMode (dev double-invokes mount
     // effects) and HMR, a cleanup that only clears the interval would stack bloom
     // passes and starfields on every re-run. Also disposes the starfield's GPU
     // resources, which scene.remove() alone does not free.
     return () => {
-      clearInterval(orbit);
+      if (orbit !== undefined) clearInterval(orbit);
       fg.postProcessingComposer().removePass(bloom);
       fg.scene().remove(starfield);
       starfield.geometry.dispose();
       (starfield.material as THREE.Material).dispose();
     };
-  }, []);
+  }, [reduceMotion]);
 
   // Selection dimming is computed inside `nodeThreeObject`, which the library only
   // re-invokes when its own inputs change — not on every render — so an explicit
@@ -111,23 +126,26 @@ export default function GraphScene() {
     fgRef.current?.refresh();
   }, [neighborhood]);
 
-  const flyToNode = useCallback((node: SceneNode) => {
-    const fg = fgRef.current;
-    // Pre-simulation (x still undefined) we simply no-op rather than flying to the
-    // origin or queuing the shot — an acceptable tradeoff since node click targets
-    // are unreachable until the force simulation has placed them anyway.
-    if (!fg || node.x === undefined) return;
-    const distance = 90;
-    // Clamp the denominator so a node sitting at (or very near) the origin doesn't
-    // blow up the ratio (division by ~0) and send the camera to infinity.
-    const dist = Math.max(Math.hypot(node.x, node.y ?? 0, node.z ?? 0), 1);
-    const ratio = 1 + distance / dist;
-    fg.cameraPosition(
-      { x: node.x * ratio, y: (node.y ?? 0) * ratio, z: (node.z ?? 0) * ratio },
-      { x: node.x, y: node.y ?? 0, z: node.z ?? 0 },
-      1400,
-    );
-  }, []);
+  const flyToNode = useCallback(
+    (node: SceneNode) => {
+      const fg = fgRef.current;
+      // Pre-simulation (x still undefined) we simply no-op rather than flying to the
+      // origin or queuing the shot — an acceptable tradeoff since node click targets
+      // are unreachable until the force simulation has placed them anyway.
+      if (!fg || node.x === undefined) return;
+      const distance = 90;
+      // Clamp the denominator so a node sitting at (or very near) the origin doesn't
+      // blow up the ratio (division by ~0) and send the camera to infinity.
+      const dist = Math.max(Math.hypot(node.x, node.y ?? 0, node.z ?? 0), 1);
+      const ratio = 1 + distance / dist;
+      fg.cameraPosition(
+        { x: node.x * ratio, y: (node.y ?? 0) * ratio, z: (node.z ?? 0) * ratio },
+        { x: node.x, y: node.y ?? 0, z: node.z ?? 0 },
+        reduceMotion ? 0 : 1400,
+      );
+    },
+    [reduceMotion],
+  );
 
   useEffect(() => {
     if (!flyTarget) return;
@@ -141,33 +159,72 @@ export default function GraphScene() {
 
   const dimmed = (node: SceneNode) => neighborhood.size > 0 && !neighborhood.has(node.id);
 
+  const sortedNodes = useMemo(
+    () => (graph ? [...graph.nodes].sort((a, b) => a.module.localeCompare(b.module)) : []),
+    [graph],
+  );
+
   return (
-    <Graph3D
-      ref={fgRef}
-      graphData={data}
-      backgroundColor="#04040c"
-      nodeThreeObject={(node) => {
-        const radius = 3 + node.centrality * 40;
-        const color = node.status === 'parse_error' ? ERROR_COLOR : packageColor(node.package);
-        const material = new THREE.MeshBasicMaterial({
-          color,
-          transparent: true,
-          opacity: dimmed(node) ? 0.12 : node.status === 'parse_error' ? 0.5 : 0.95,
-        });
-        return new THREE.Mesh(new THREE.SphereGeometry(radius, 24, 24), material);
+    <div
+      className="h-full"
+      // Any pointer interaction with the scene permanently ends the establishing
+      // shot — the pointer-level stop mechanism for the auto-orbit (and it keeps
+      // the interval from fighting a manual camera drag).
+      onPointerDown={() => {
+        engaged.current = true;
       }}
-      nodeThreeObjectExtend={false}
-      nodeLabel={(node) => node.module}
-      linkColor={() => '#3a4a7a'}
-      linkOpacity={0.35}
-      linkDirectionalParticles={2}
-      linkDirectionalParticleSpeed={0.006}
-      linkDirectionalParticleWidth={1.6}
-      onNodeClick={(node) => {
-        select(node.id);
-        flyToNode(node);
-      }}
-      onBackgroundClick={() => select(null)}
-    />
+    >
+      {/* Keyboard-operable proxy for node clicks: the WebGL canvas isn't in the
+          tab order, so this visually-hidden (visible on focus) select lets any
+          module be reached and selected without a mouse. It drives the same
+          flyTo -> select/flyToNode path as onNodeClick. */}
+      <label htmlFor="module-jump" className="sr-only">
+        Jump to module
+      </label>
+      <select
+        id="module-jump"
+        value=""
+        onChange={(e) => {
+          if (e.target.value) flyTo(e.target.value);
+        }}
+        className="sr-only focus:not-sr-only focus:fixed focus:top-4 focus:left-1/2 focus:z-30 focus:h-9 focus:w-80 focus:-translate-x-1/2 focus:rounded-md focus:border focus:border-border focus:bg-popover focus:px-3 focus:font-mono focus:text-xs focus:text-popover-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+      >
+        <option value="" disabled>
+          Jump to module…
+        </option>
+        {sortedNodes.map((n) => (
+          <option key={n.id} value={n.id}>
+            {n.module}
+          </option>
+        ))}
+      </select>
+      <Graph3D
+        ref={fgRef}
+        graphData={data}
+        backgroundColor="#04040c"
+        nodeThreeObject={(node) => {
+          const radius = 3 + node.centrality * 40;
+          const color = node.status === 'parse_error' ? ERROR_COLOR : packageColor(node.package);
+          const material = new THREE.MeshBasicMaterial({
+            color,
+            transparent: true,
+            opacity: dimmed(node) ? 0.12 : node.status === 'parse_error' ? 0.5 : 0.95,
+          });
+          return new THREE.Mesh(new THREE.SphereGeometry(radius, 24, 24), material);
+        }}
+        nodeThreeObjectExtend={false}
+        nodeLabel={(node) => node.module}
+        linkColor={() => '#3a4a7a'}
+        linkOpacity={0.35}
+        linkDirectionalParticles={reduceMotion ? 0 : 2}
+        linkDirectionalParticleSpeed={reduceMotion ? 0 : 0.006}
+        linkDirectionalParticleWidth={1.6}
+        onNodeClick={(node) => {
+          select(node.id);
+          flyToNode(node);
+        }}
+        onBackgroundClick={() => select(null)}
+      />
+    </div>
   );
 }

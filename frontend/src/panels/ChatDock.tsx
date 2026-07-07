@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { streamChat } from '../api/client';
 import { useStore } from '../store/store';
+import { ModuleChip } from '../components/ModuleChip';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -9,6 +10,9 @@ import { cn } from '@/lib/utils';
 
 export default function ChatDock() {
   const [input, setInput] = useState('');
+  // Completion status for the header's aria-live region — set once per answer
+  // (never cleared back to '') so screen readers hear that streaming finished.
+  const [liveStatus, setLiveStatus] = useState('');
   const chat = useStore((s) => s.chat);
   const streaming = useStore((s) => s.streaming);
   const flyTo = useStore((s) => s.flyTo);
@@ -44,6 +48,14 @@ export default function ChatDock() {
       useStore.getState();
     const history = useStore.getState().chat;
     addUserMessage(question);
+    // Sentence-case failure copy stating cause and fix, appended after whatever
+    // partial answer already streamed in (hence the conditional joining space).
+    const appendFailure = (text: string) => {
+      const partial = useStore.getState().chat.at(-1)?.content;
+      appendAssistantToken(partial ? ` ${text}` : text);
+      finishAssistant();
+      setLiveStatus('error receiving answer');
+    };
     try {
       await streamChat(question, history, {
         onToken: appendAssistantToken,
@@ -51,15 +63,16 @@ export default function ChatDock() {
           addCitation(path);
           flyTo(path); // the answer physically navigates the map
         },
-        onDone: finishAssistant,
-        onError: (detail) => {
-          appendAssistantToken(` [error: ${detail}]`);
+        onDone: () => {
           finishAssistant();
+          setLiveStatus('answer ready');
+        },
+        onError: (detail) => {
+          appendFailure(`Couldn't answer that: ${detail}. Try rephrasing the question.`);
         },
       });
     } catch {
-      appendAssistantToken(' [connection lost]');
-      finishAssistant();
+      appendFailure("Lost the connection to the server. Check it's running and ask again.");
     }
   };
 
@@ -73,7 +86,7 @@ export default function ChatDock() {
           ASK THE MAP
         </h2>
         <span aria-live="polite" className="font-mono text-[11px] text-muted-foreground">
-          {streaming ? 'answering' : ''}
+          {streaming ? 'answering' : liveStatus}
         </span>
       </header>
       <ScrollArea className="min-h-0 flex-1">
@@ -99,14 +112,7 @@ export default function ChatDock() {
               {message.citations && message.citations.length > 0 && (
                 <div className="mt-1.5 flex flex-wrap gap-1.5">
                   {message.citations.map((c) => (
-                    <button
-                      key={c}
-                      type="button"
-                      onClick={() => flyTo(c)}
-                      className="inline-flex h-9 max-w-full items-center rounded-md border border-border bg-background/40 px-2.5 font-mono text-[11px] text-muted-foreground transition-colors outline-none hover:border-primary hover:text-primary focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
-                    >
-                      <span className="truncate">{c}</span>
-                    </button>
+                    <ModuleChip key={c} path={c} onFly={flyTo} className="text-[11px]" />
                   ))}
                 </div>
               )}

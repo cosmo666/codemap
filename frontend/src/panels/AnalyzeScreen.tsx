@@ -61,7 +61,7 @@ export default function AnalyzeScreen() {
 
   return (
     <div className="starfield flex h-full items-center justify-center p-6">
-      <Card className="w-full max-w-md shadow-2xl shadow-black/50 motion-safe:animate-panel-in">
+      <Card className="w-full max-w-md rounded-lg shadow-2xl shadow-black/50 motion-safe:animate-panel-in">
         <CardContent className="flex flex-col gap-6 p-8">
           <div className="flex flex-col gap-2">
             <h1 className="font-display text-2xl font-medium tracking-[0.35em] text-foreground">
