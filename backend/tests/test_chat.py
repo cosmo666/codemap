@@ -1,4 +1,5 @@
 import asyncio
+import json
 import shutil
 from collections.abc import AsyncIterator
 from pathlib import Path
@@ -40,7 +41,8 @@ class StreamingFakeLLM(FakeLLM):
         self, system: str, user: str, history: Any = None
     ) -> AsyncIterator[str]:
         async def gen() -> AsyncIterator[str]:
-            for part in ["Auth lives in ", "[cite: app/auth/session.py]", " done."]:
+            # Citation split across chunks: detection must work on the buffered text.
+            for part in ["Auth lives in ", "[cite: app/auth/", "session.py]", " done."]:
                 yield part
 
         return gen()
@@ -68,6 +70,23 @@ async def test_chat_streams_tokens_and_citations(tmp_path: Path) -> None:
             body = ""
             async for line in response.aiter_lines():
                 body += line + "\n"
-        assert '"type": "token"' in body or '"type":"token"' in body
-        assert "app/auth/session.py" in body
-        assert '"done"' in body
+        events = [
+            json.loads(line[5:].strip())
+            for line in body.splitlines()
+            if line.startswith("data:")
+        ]
+        types = [e["type"] for e in events]
+        assert "token" in types
+        citations = [e["path"] for e in events if e["type"] == "citation"]
+        assert citations == ["app/auth/session.py"]  # exactly once, via buffered detection
+        assert types[-1] == "done"
+
+
+async def test_chat_before_analysis_is_404() -> None:
+    llm: Any = StreamingFakeLLM()
+    pipeline = Pipeline(make_settings(), llm=llm, embed_fn=fake_embed)
+    app = create_app(settings=make_settings(), pipeline=pipeline, llm=llm)
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post("/chat", json={"question": "hi", "history": []})
+        assert response.status_code == 404
