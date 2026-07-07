@@ -33,3 +33,23 @@ def test_search_finds_exact_text_first(tmp_path: Path) -> None:
     loaded = VectorIndex.load(tmp_path, embed_fn=fake_embed)
     results2 = loaded.search("def login(): ...", k=2)
     assert results2[0][0].name == "auth"
+
+
+def test_build_truncates_embed_input_but_keeps_full_chunk_text() -> None:
+    seen_lengths: list[int] = []
+
+    def spy_embed(texts: list[str]) -> np.ndarray:
+        seen_lengths.extend(len(t) for t in texts)
+        return fake_embed(texts)
+
+    big = make_chunk("big", "x" * 10_000)
+    index = VectorIndex(embed_fn=spy_embed)
+    index.build([big])
+    assert max(seen_lengths) <= 4000
+    assert len(index._chunks[0].text) == 10_000  # stored chunk untouched
+
+
+def test_build_empty_chunks_is_safe() -> None:
+    index = VectorIndex(embed_fn=fake_embed)
+    index.build([])
+    assert index.search("anything") == []

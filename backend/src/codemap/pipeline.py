@@ -95,8 +95,13 @@ class Pipeline:
             if pm.info.status == "ok":
                 chunks.extend(chunk_module(pm))
         chunks.extend(chunk_summaries(explanations))
-        index = VectorIndex(embed_fn=self._embed_fn)
-        await asyncio.to_thread(index.build, chunks)
+
+        def build_index() -> VectorIndex:
+            index = VectorIndex(embed_fn=self._embed_fn)
+            index.build(chunks)
+            return index
+
+        index = await asyncio.to_thread(build_index)
 
         store.save_graph(graph)
         store.save_explanations(explanations, packages)

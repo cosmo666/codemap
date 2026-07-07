@@ -11,6 +11,7 @@ EmbedFn = Callable[[list[str]], np.ndarray]
 
 _INDEX_FILE = "index.faiss"
 _CHUNKS_FILE = "chunks.json"
+_EMBED_CHARS = 4000
 
 
 def _default_embed_fn() -> EmbedFn:
@@ -19,7 +20,7 @@ def _default_embed_fn() -> EmbedFn:
     model = TextEmbedding("BAAI/bge-small-en-v1.5")
 
     def embed(texts: list[str]) -> np.ndarray:
-        return np.array(list(model.embed(texts)), dtype=np.float32)
+        return np.array(list(model.embed(texts, batch_size=32)), dtype=np.float32)
 
     return embed
 
@@ -40,7 +41,10 @@ class VectorIndex:
 
     def build(self, chunks: list[Chunk]) -> None:
         self._chunks = chunks
-        vectors = _normalize(self._embed_fn([c.text for c in chunks]))
+        if not chunks:
+            self._index = None
+            return
+        vectors = _normalize(self._embed_fn([c.text[:_EMBED_CHARS] for c in chunks]))
         self._index = faiss.IndexFlatIP(vectors.shape[1])
         self._index.add(vectors)
 
