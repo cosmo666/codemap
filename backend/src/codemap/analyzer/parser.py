@@ -34,20 +34,31 @@ def _function_info(node: ast.FunctionDef | ast.AsyncFunctionDef) -> FunctionInfo
     )
 
 
-def _resolve_from_import(module_dotted: str, node: ast.ImportFrom) -> str | None:
+def _resolve_from_import(
+    module_dotted: str, node: ast.ImportFrom, is_package: bool
+) -> list[str]:
     if node.level == 0:
-        return node.module
-    base = module_dotted.split(".")
-    base = base[: len(base) - node.level]
+        return [node.module] if node.module else []
+    parts = module_dotted.split(".")
+    drop = node.level - 1 if is_package else node.level
+    if drop > len(parts):
+        return []
+    parts = parts[: len(parts) - drop]
     if node.module:
-        base.append(node.module)
-    return ".".join(base) if base else None
+        parts = [*parts, node.module]
+    prefix = ".".join(parts)
+    if not prefix:
+        return []
+    if node.module:
+        return [prefix]
+    return [f"{prefix}.{alias.name}" for alias in node.names]
 
 
 def parse_module(repo: Path, file: Path) -> ParsedModule:
     rel_posix = file.relative_to(repo).as_posix()
     parts = file.relative_to(repo).parts
     package = parts[0] if len(parts) > 1 else "root"
+    is_package = file.name == "__init__.py"
     source = file.read_text(encoding="utf-8", errors="replace")
     module_dotted = _dotted(repo, file)
     base = ModuleInfo(
@@ -63,7 +74,7 @@ def parse_module(repo: Path, file: Path) -> ParsedModule:
     )
     try:
         tree = ast.parse(source)
-    except SyntaxError:
+    except (SyntaxError, ValueError):
         return ParsedModule(info=base.model_copy(update={"status": "parse_error"}), source=source)
 
     imports: list[str] = []
@@ -73,9 +84,7 @@ def parse_module(repo: Path, file: Path) -> ParsedModule:
         if isinstance(node, ast.Import):
             imports.extend(alias.name for alias in node.names)
         elif isinstance(node, ast.ImportFrom):
-            resolved = _resolve_from_import(module_dotted, node)
-            if resolved:
-                imports.append(resolved)
+            imports.extend(_resolve_from_import(module_dotted, node, is_package))
         elif isinstance(node, ast.ClassDef):
             methods = [
                 _function_info(n)

@@ -33,3 +33,26 @@ def test_parse_repo_fixture() -> None:
     assert broken.classes == [] and broken.functions == []
     init = by_path["app/__init__.py"].info
     assert init.module == "app"
+
+
+def test_relative_imports_in_init_files(tmp_path: Path) -> None:
+    pkg = tmp_path / "pkg"
+    sub = pkg / "sub"
+    sub.mkdir(parents=True)
+    (pkg / "__init__.py").write_text("from .sub import thing\nfrom . import util\n")
+    (pkg / "util.py").write_text("x = 1\n")
+    (sub / "__init__.py").write_text("from ..util import x\nfrom .thing import T\n")
+    (sub / "thing.py").write_text("class T:\n    pass\n")
+    (sub / "use.py").write_text("from ..util import x\n")
+    info = {p.info.path: p.info for p in parse_repo(tmp_path)}
+    assert "pkg.sub" in info["pkg/__init__.py"].imports
+    assert "pkg.util" in info["pkg/__init__.py"].imports
+    assert "pkg.util" in info["pkg/sub/__init__.py"].imports
+    assert "pkg.sub.thing" in info["pkg/sub/__init__.py"].imports
+    assert "pkg.util" in info["pkg/sub/use.py"].imports
+
+
+def test_null_bytes_file_is_parse_error(tmp_path: Path) -> None:
+    (tmp_path / "bad.py").write_bytes(b"x = 1\x00")
+    parsed = parse_repo(tmp_path)
+    assert parsed[0].info.status == "parse_error"
