@@ -26,6 +26,7 @@ class AnalyzeRequest(BaseModel):
 class AnalysisRun:
     queue: asyncio.Queue[PipelineEvent] = field(default_factory=asyncio.Queue)
     done: bool = False
+    task: asyncio.Task[None] | None = None
 
 
 def create_app(settings: Settings | None = None, pipeline: Pipeline | None = None) -> FastAPI:
@@ -65,7 +66,7 @@ def create_app(settings: Settings | None = None, pipeline: Pipeline | None = Non
             finally:
                 run.done = True
 
-        asyncio.create_task(execute())
+        run.task = asyncio.create_task(execute())
         return {"analysis_id": analysis_id}
 
     @app.get("/analyze/{analysis_id}/events")

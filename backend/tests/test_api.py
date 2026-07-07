@@ -1,4 +1,5 @@
 import asyncio
+import json
 import shutil
 from pathlib import Path
 from typing import Any
@@ -64,3 +65,28 @@ async def test_graph_before_analyze_is_404() -> None:
     client, _ = make_client()
     async with client:
         assert (await client.get("/graph")).status_code == 404
+
+
+async def test_analyze_events_stream_and_404s(repo: Path) -> None:
+    client, app = make_client()
+    async with client:
+        assert (await client.get("/analyze/nope/events")).status_code == 404
+
+        analysis_id = (
+            await client.post("/analyze", json={"repo_path": str(repo)})
+        ).json()["analysis_id"]
+
+        stages: list[str] = []
+        async with client.stream("GET", f"/analyze/{analysis_id}/events") as response:
+            assert response.status_code == 200
+            async for line in response.aiter_lines():
+                if line.startswith("data:"):
+                    event = json.loads(line[5:].strip())
+                    stages.append(event["stage"])
+                    if event["stage"] in ("done", "error"):
+                        break
+        assert stages[0] == "parsing"
+        assert "explaining" in stages and "indexing" in stages
+        assert stages[-1] == "done"
+
+        assert (await client.get("/module/not/a/module.py")).status_code == 404
