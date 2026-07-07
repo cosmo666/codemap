@@ -10,6 +10,7 @@ def test_build_graph_edges_and_centrality() -> None:
     graph = build_graph(parse_repo(FIXTURE))
     assert len(graph.nodes) == 10
     edge_set = {(e.source, e.target) for e in graph.edges}
+    assert len(graph.edges) == len(edge_set)  # no duplicate edges
     assert ("app/main.py", "app/auth/session.py") in edge_set
     assert ("app/main.py", "app/core/engine.py") in edge_set
     assert ("app/core/engine.py", "app/core/models.py") in edge_set
