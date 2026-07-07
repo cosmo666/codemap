@@ -38,7 +38,11 @@ def _resolve_from_import(
     module_dotted: str, node: ast.ImportFrom, is_package: bool
 ) -> list[str]:
     if node.level == 0:
-        return [node.module] if node.module else []
+        if node.module:
+            candidates = [node.module]
+            candidates.extend(f"{node.module}.{alias.name}" for alias in node.names)
+            return candidates
+        return []
     parts = module_dotted.split(".")
     drop = node.level - 1 if is_package else node.level
     if drop > len(parts):
