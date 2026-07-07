@@ -60,6 +60,7 @@ async def test_complete_retries_on_rate_limit() -> None:
 
 async def test_complete_gives_up_after_retries() -> None:
     err = FakeRateLimit()
-    client, _ = make_client([err, err, err, err])
+    client, fake = make_client([err, err, err, err])
     with pytest.raises(openai.RateLimitError):
         await client.complete("sys", "user")
+    assert fake.calls == 4
