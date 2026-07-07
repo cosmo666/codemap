@@ -11,7 +11,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
 
+from codemap.api.chat import CHAT_SYSTEM_PROMPT, build_context, extract_new_citations
 from codemap.config import Settings
+from codemap.llm.client import LLMClient
 from codemap.logging import configure_logging
 from codemap.pipeline import Pipeline, PipelineEvent
 
@@ -22,6 +24,11 @@ class AnalyzeRequest(BaseModel):
     repo_path: str
 
 
+class ChatRequest(BaseModel):
+    question: str
+    history: list[dict[str, str]] = []
+
+
 @dataclass
 class AnalysisRun:
     queue: asyncio.Queue[PipelineEvent] = field(default_factory=asyncio.Queue)
@@ -29,7 +36,11 @@ class AnalysisRun:
     task: asyncio.Task[None] | None = None
 
 
-def create_app(settings: Settings | None = None, pipeline: Pipeline | None = None) -> FastAPI:
+def create_app(
+    settings: Settings | None = None,
+    pipeline: Pipeline | None = None,
+    llm: LLMClient | None = None,
+) -> FastAPI:
     configure_logging()
     settings = settings or Settings()  # type: ignore[call-arg]  # fields sourced from env/.env
     app = FastAPI(title="CodeMap", version="0.1.0")
@@ -38,6 +49,7 @@ def create_app(settings: Settings | None = None, pipeline: Pipeline | None = Non
     )
     app.state.settings = settings
     app.state.pipeline = pipeline or Pipeline(settings)
+    app.state.llm = llm or LLMClient(settings)
     app.state.analyses = {}
     app.state.graph = None
     app.state.index = None
@@ -109,5 +121,27 @@ def create_app(settings: Settings | None = None, pipeline: Pipeline | None = Non
             "dependencies": dependencies,
             "dependents": dependents,
         }
+
+    @app.post("/chat")
+    async def chat(request: ChatRequest) -> EventSourceResponse:
+        if app.state.index is None:
+            raise HTTPException(status_code=404, detail="No analysis yet")
+        hits = app.state.index.search(request.question, k=8)
+        context, _weak = build_context(hits, settings.similarity_threshold)
+
+        async def stream() -> AsyncIterator[dict[str, str]]:
+            seen: set[str] = set()
+            buffer = ""
+            user = f"{context}\n\nQUESTION: {request.question}"
+            async for token in app.state.llm.stream(
+                CHAT_SYSTEM_PROMPT, user, history=request.history
+            ):
+                buffer += token
+                yield {"data": json.dumps({"type": "token", "content": token})}
+                for path in extract_new_citations(buffer, seen):
+                    yield {"data": json.dumps({"type": "citation", "path": path})}
+            yield {"data": json.dumps({"type": "done"})}
+
+        return EventSourceResponse(stream())
 
     return app
