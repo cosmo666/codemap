@@ -15,6 +15,9 @@ dependencies = [
     "pydantic>=2.9",
     "pydantic-settings>=2.6",
     "structlog>=24.4",
+    "tree-sitter>=0.23",
+    # 1.x is a network-downloading rewrite; 0.x bundles all grammars in wheels.
+    "tree-sitter-language-pack>=0.13,<1",
 ]
 
 [project.optional-dependencies]

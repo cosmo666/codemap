@@ -29,6 +29,8 @@ class ModuleInfo(BaseModel):
     docstring: str | None
     loc: int
     status: Literal["ok", "parse_error"]
+    # Default keeps previously persisted artifacts (graph.json) valid on warm start.
+    language: str = "python"
 
 
 class ParsedModule(BaseModel):

@@ -122,6 +122,8 @@ export default function ModulePanel() {
             {node?.module ?? selectedId}
           </h2>
           <p className="flex items-center gap-2 font-mono text-[11px] tabular-nums text-muted-foreground">
+            <span className="uppercase">{node?.language ?? 'unknown'}</span>
+            <span aria-hidden="true" className="h-3 w-px bg-border" />
             <span>{node?.loc ?? 0} LOC</span>
             <span aria-hidden="true" className="h-3 w-px bg-border" />
             <span>MASS {(node?.centrality ?? 0).toFixed(3)}</span>

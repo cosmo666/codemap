@@ -21,6 +21,17 @@ def chunk_module(pm: ParsedModule) -> list[Chunk]:
     spans: list[tuple[str, str, int, int]] = [
         ("class", c.name, c.lineno, c.end_lineno) for c in pm.info.classes
     ] + [("function", f.name, f.lineno, f.end_lineno) for f in pm.info.functions]
+    if not spans:
+        # No symbols (universal-tier or plain-script files): one whole-file chunk.
+        return [
+            Chunk(
+                id=f"{pm.info.path}::module",
+                path=pm.info.path,
+                kind="module",
+                name=pm.info.path,
+                text=f"# {pm.info.path}\n{pm.source}",
+            )
+        ]
     for kind, name, start, end in spans:
         covered.update(range(start, end + 1))
         text = "\n".join(lines[start - 1 : end])

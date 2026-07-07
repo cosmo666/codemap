@@ -14,6 +14,8 @@ class GraphNode(BaseModel):
     status: Literal["ok", "parse_error"]
     centrality: float
     explanation: str | None = None
+    # Default keeps previously persisted graph.json valid on warm start.
+    language: str = "python"
 
 
 class GraphEdge(BaseModel):
@@ -64,6 +66,7 @@ def build_graph(parsed: list[ParsedModule]) -> GraphData:
             loc=p.info.loc,
             status=p.info.status,
             centrality=round(centrality.get(p.info.path, 0.0), 4),
+            language=p.info.language,
         )
         for p in parsed
     ]

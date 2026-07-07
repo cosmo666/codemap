@@ -6,6 +6,7 @@ export interface GraphNode {
   status: 'ok' | 'parse_error';
   centrality: number;
   explanation: string | null;
+  language: string;
 }
 
 export interface GraphEdge {
