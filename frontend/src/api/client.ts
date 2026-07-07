@@ -22,12 +22,22 @@ export async function startAnalyze(repoPath: string): Promise<string> {
 
 export function subscribeProgress(id: string, onEvent: (e: PipelineEvent) => void): () => void {
   const source = new EventSource(`/analyze/${id}/events`);
+  let finished = false;
   source.onmessage = (message) => {
     const event = JSON.parse(message.data as string) as PipelineEvent;
     onEvent(event);
-    if (event.stage === 'done' || event.stage === 'error') source.close();
+    if (event.stage === 'done' || event.stage === 'error') {
+      finished = true;
+      source.close();
+    }
   };
-  source.onerror = () => source.close();
+  source.onerror = () => {
+    source.close();
+    if (!finished) {
+      finished = true;
+      onEvent({ stage: 'error', current: null, total: null, detail: 'connection lost' });
+    }
+  };
   return () => source.close();
 }
 
