@@ -49,6 +49,7 @@ ignore_missing_imports = true
 [tool.ruff]
 line-length = 100
 src = ["src", "tests"]
+exclude = ["tests/fixtures"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM", "ANN"]
