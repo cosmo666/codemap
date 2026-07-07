@@ -82,6 +82,50 @@ async def test_chat_streams_tokens_and_citations(tmp_path: Path) -> None:
         assert types[-1] == "done"
 
 
+class ExplodingStreamLLM(FakeLLM):
+    def stream(self, system: str, user: str, history: Any = None) -> AsyncIterator[str]:
+        async def gen() -> AsyncIterator[str]:
+            yield "partial "
+            raise RuntimeError("llm died mid-stream")
+
+        return gen()
+
+
+async def test_chat_midstream_failure_emits_error_then_done(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    shutil.copytree(FIXTURE, repo)
+    llm: Any = ExplodingStreamLLM()
+    pipeline = Pipeline(make_settings(), llm=llm, embed_fn=fake_embed)
+    app = create_app(settings=make_settings(), pipeline=pipeline, llm=llm)
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        analysis_id = (
+            await client.post("/analyze", json={"repo_path": str(repo)})
+        ).json()["analysis_id"]
+        for _ in range(100):
+            if app.state.analyses[analysis_id].done:
+                break
+            await asyncio.sleep(0.05)
+
+        async with client.stream(
+            "POST", "/chat", json={"question": "where is auth?", "history": []}
+        ) as response:
+            body = ""
+            async for line in response.aiter_lines():
+                body += line + "\n"
+        events = [
+            json.loads(line[5:].strip())
+            for line in body.splitlines()
+            if line.startswith("data:")
+        ]
+        types = [e["type"] for e in events]
+        assert "token" in types
+        error_events = [e for e in events if e["type"] == "error"]
+        assert len(error_events) == 1
+        assert "llm died mid-stream" in error_events[0]["detail"]
+        assert types[-1] == "done"
+
+
 async def test_chat_before_analysis_is_404() -> None:
     llm: Any = StreamingFakeLLM()
     pipeline = Pipeline(make_settings(), llm=llm, embed_fn=fake_embed)

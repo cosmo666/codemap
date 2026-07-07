@@ -44,7 +44,12 @@ export function subscribeProgress(id: string, onEvent: (e: PipelineEvent) => voi
 export async function streamChat(
   question: string,
   history: ChatMessage[],
-  handlers: { onToken: (t: string) => void; onCitation: (p: string) => void; onDone: () => void },
+  handlers: {
+    onToken: (t: string) => void;
+    onCitation: (p: string) => void;
+    onDone: () => void;
+    onError?: (detail: string) => void;
+  },
 ): Promise<void> {
   const response = await fetch('/chat', {
     method: 'POST',
@@ -69,6 +74,7 @@ export async function streamChat(
       const event = JSON.parse(line.slice(5).trim()) as ChatEvent;
       if (event.type === 'token') handlers.onToken(event.content);
       else if (event.type === 'citation') handlers.onCitation(event.path);
+      else if (event.type === 'error') handlers.onError?.(event.detail);
       else handlers.onDone();
     }
   }

@@ -24,6 +24,10 @@ export default function ChatDock() {
           flyTo(path); // the answer physically navigates the map
         },
         onDone: finishAssistant,
+        onError: (detail) => {
+          appendAssistantToken(` [error: ${detail}]`);
+          finishAssistant();
+        },
       });
     } catch {
       appendAssistantToken(' [connection lost]');

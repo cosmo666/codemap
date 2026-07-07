@@ -45,7 +45,10 @@ def create_app(
     settings = settings or Settings()  # type: ignore[call-arg]  # fields sourced from env/.env
     app = FastAPI(title="CodeMap", version="0.1.0")
     app.add_middleware(
-        CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"]
+        CORSMiddleware,
+        allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+        allow_methods=["*"],
+        allow_headers=["*"],
     )
     app.state.settings = settings
     app.state.pipeline = pipeline or Pipeline(settings)
@@ -133,13 +136,17 @@ def create_app(
             seen: set[str] = set()
             buffer = ""
             user = f"{context}\n\nQUESTION: {request.question}"
-            async for token in app.state.llm.stream(
-                CHAT_SYSTEM_PROMPT, user, history=request.history
-            ):
-                buffer += token
-                yield {"data": json.dumps({"type": "token", "content": token})}
-                for path in extract_new_citations(buffer, seen):
-                    yield {"data": json.dumps({"type": "citation", "path": path})}
+            try:
+                async for token in app.state.llm.stream(
+                    CHAT_SYSTEM_PROMPT, user, history=request.history
+                ):
+                    buffer += token
+                    yield {"data": json.dumps({"type": "token", "content": token})}
+                    for path in extract_new_citations(buffer, seen):
+                        yield {"data": json.dumps({"type": "citation", "path": path})}
+            except Exception as exc:  # noqa: BLE001 - report to client, don't crash the server
+                log.error("chat_stream_failed", error=str(exc))
+                yield {"data": json.dumps({"type": "error", "detail": str(exc)})}
             yield {"data": json.dumps({"type": "done"})}
 
         return EventSourceResponse(stream())

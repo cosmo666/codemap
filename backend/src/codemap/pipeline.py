@@ -1,3 +1,4 @@
+import asyncio
 from collections.abc import Callable
 from pathlib import Path
 from typing import Literal
@@ -95,7 +96,7 @@ class Pipeline:
                 chunks.extend(chunk_module(pm))
         chunks.extend(chunk_summaries(explanations))
         index = VectorIndex(embed_fn=self._embed_fn)
-        index.build(chunks)
+        await asyncio.to_thread(index.build, chunks)
 
         store.save_graph(graph)
         store.save_explanations(explanations, packages)

@@ -24,11 +24,14 @@ repo ──> Analyzer (ast) ──> Explainer (GPT-4.1 mini, map-reduce, hash-ca
 
 ## Quickstart (Docker)
 
-`CODEMAP_REPOS=C:\your\code docker compose up` then open http://localhost:5173
-and analyze `/repos/<project>` (the backend only sees paths under the mounted
-`/repos` volume, not your host filesystem directly). You'll still need
-`backend/.env` populated (see step 2 above) before `up` — it's read at
-container start, not at build time.
+PowerShell: `$env:CODEMAP_REPOS='C:\your\code'; docker compose up`
+
+bash/zsh: `CODEMAP_REPOS=/your/code docker compose up`
+
+Then open http://localhost:5173 and analyze `/repos/<project>` (the backend
+only sees paths under the mounted `/repos` volume, not your host filesystem
+directly). You'll still need `backend/.env` populated (see step 2 above)
+before `up` — it's read at container start, not at build time.
 
 ## Development
 

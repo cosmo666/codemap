@@ -42,4 +42,5 @@ export interface ChatMessage {
 export type ChatEvent =
   | { type: 'token'; content: string }
   | { type: 'citation'; path: string }
+  | { type: 'error'; detail: string }
   | { type: 'done' };
