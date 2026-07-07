@@ -14,7 +14,13 @@ import { cn } from '@/lib/utils';
  * absolute paths, so this is the only way to fill the repo-path input by
  * clicking rather than typing). Read-only, directories only.
  */
-export function FolderBrowser({ onUseFolder }: { onUseFolder: (path: string) => void }) {
+export function FolderBrowser({
+  onUseFolder,
+  disabled = false,
+}: {
+  onUseFolder: (path: string) => void;
+  disabled?: boolean;
+}) {
   const [open, setOpen] = useState(false);
   const [listing, setListing] = useState<FsListing | null>(null);
   const [loading, setLoading] = useState(false);
@@ -74,6 +80,7 @@ export function FolderBrowser({ onUseFolder }: { onUseFolder: (path: string) => 
       <Button
         type="button"
         variant="ghost"
+        disabled={disabled}
         aria-expanded={open}
         aria-haspopup="dialog"
         onClick={() => (open ? close() : openPanel())}

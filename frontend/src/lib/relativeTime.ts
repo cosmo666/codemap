@@ -9,7 +9,9 @@ const UNITS: { limit: number; div: number; label: string }[] = [
 ];
 
 export function relativeTime(iso: string): string {
-  const then = new Date(iso).getTime();
+  // Python's isoformat() emits microseconds; some engines reject more than
+  // three fractional digits, so truncate to milliseconds before parsing.
+  const then = new Date(iso.replace(/(\.\d{3})\d+/, '$1')).getTime();
   if (Number.isNaN(then)) return '';
   const diffSeconds = Math.max(0, (Date.now() - then) / 1000);
   if (diffSeconds < 60) return 'just now';

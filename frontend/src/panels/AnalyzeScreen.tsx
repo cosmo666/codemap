@@ -35,13 +35,22 @@ function Eyebrow({ children }: { children: ReactNode }) {
   );
 }
 
-function RecentCard({ entry, onOpen }: { entry: RecentEntry; onOpen: (path: string) => void }) {
+function RecentCard({
+  entry,
+  onOpen,
+  disabled,
+}: {
+  entry: RecentEntry;
+  onOpen: (path: string) => void;
+  disabled: boolean;
+}) {
   const languages = entry.languages.slice(0, 3).map((l) => l.toUpperCase());
   return (
     <button
       type="button"
+      disabled={disabled}
       onClick={() => onOpen(entry.repo_path)}
-      className="flex min-h-20 flex-col gap-1.5 rounded-lg border border-border bg-card/60 p-4 text-left outline-none transition-colors hover:border-primary focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+      className="flex min-h-20 flex-col gap-1.5 rounded-lg border border-border bg-card/60 p-4 text-left outline-none transition-colors hover:border-primary focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-50"
     >
       <span className="truncate font-mono text-sm font-medium text-primary">{entry.name}</span>
       <span title={entry.repo_path} className="truncate text-xs text-muted-foreground">
@@ -78,6 +87,7 @@ export default function AnalyzeScreen() {
   const [repoPath, setRepoPath] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [recents, setRecents] = useState<RecentEntry[]>([]);
+  const [starting, setStarting] = useState(false);
   const phase = useStore((s) => s.phase);
   const progress = useStore((s) => s.progress);
   const { setPhase, pushProgress, setGraph } = useStore.getState();
@@ -99,12 +109,18 @@ export default function AnalyzeScreen() {
   }, []);
 
   const start = async (pathOverride?: string) => {
+    // Re-entrancy guard: between a click and startAnalyze resolving, every
+    // other trigger (submit, recent cards) must be inert, or two analyses
+    // could run concurrently and the last to finish would silently win.
+    if (starting || phase !== 'welcome') return;
     const target = (pathOverride ?? repoPath).trim();
     if (!target) return;
     setError(null);
+    setStarting(true);
     try {
       const id = await startAnalyze(target);
       setPhase('analyzing');
+      setStarting(false);
       subscribeProgress(id, (event) => {
         pushProgress(event);
         if (event.stage === 'done')
@@ -121,6 +137,7 @@ export default function AnalyzeScreen() {
       });
     } catch (e) {
       setError(failureMessage(e instanceof Error ? e.message : String(e)));
+      setStarting(false);
     }
   };
 
@@ -179,10 +196,10 @@ export default function AnalyzeScreen() {
                     aria-label="Repository path"
                     className="font-mono text-sm"
                   />
-                  <FolderBrowser onUseFolder={setRepoPath} />
+                  <FolderBrowser onUseFolder={setRepoPath} disabled={starting} />
                 </div>
-                <Button type="submit" disabled={!repoPath.trim()}>
-                  Analyze repository
+                <Button type="submit" disabled={!repoPath.trim() || starting}>
+                  {starting ? 'Starting…' : 'Analyze repository'}
                 </Button>
               </form>
             )}
@@ -224,7 +241,12 @@ export default function AnalyzeScreen() {
             <Eyebrow>Recent maps</Eyebrow>
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               {recents.map((entry) => (
-                <RecentCard key={entry.repo_path} entry={entry} onOpen={openRecent} />
+                <RecentCard
+                  key={entry.repo_path}
+                  entry={entry}
+                  onOpen={openRecent}
+                  disabled={starting}
+                />
               ))}
             </div>
           </section>

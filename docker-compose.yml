@@ -6,10 +6,18 @@ services:
     env_file:
       - path: backend/.env
         required: false
+    environment:
+      # Keep recents on a named volume so `docker compose down/up` doesn't
+      # wipe the list (Settings.recents_path picks this up case-insensitively).
+      RECENTS_PATH: /data/recents.json
     ports: ["8000:8000"]
     volumes:
       - ${CODEMAP_REPOS:-./}:/repos
+      - codemap-data:/data
   frontend:
     build: ./frontend
     ports: ["5173:5173"]
     depends_on: [backend]
+
+volumes:
+  codemap-data:
