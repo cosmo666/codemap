@@ -3,8 +3,9 @@ import json
 import uuid
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 import structlog
 from fastapi import FastAPI, HTTPException
@@ -14,6 +15,12 @@ from sse_starlette.sse import EventSourceResponse
 
 from codemap.analyzer.graph import GraphData
 from codemap.api.chat import CHAT_SYSTEM_PROMPT, build_context, extract_new_citations
+from codemap.api.recents import (
+    RecentEntry,
+    default_recents_path,
+    load_recents,
+    upsert_recent,
+)
 from codemap.config import Settings
 from codemap.indexer.index import VectorIndex
 from codemap.llm.client import LLMClient
@@ -46,6 +53,9 @@ class AnalysisRun:
 
 _MAX_DONE_ANALYSES = 5
 
+# Never shown in the /fs directory browser (on top of hidden/dot dirs).
+_FS_JUNK_DIRS = {"__pycache__", "node_modules", ".git"}
+
 
 def _prune_finished_analyses(
     analyses: dict[str, AnalysisRun], keep: int = _MAX_DONE_ANALYSES
@@ -77,6 +87,7 @@ def create_app(
     app.state.analyses = {}
     app.state.graph = None
     app.state.index = None
+    recents_path = settings.recents_path or default_recents_path()
 
     @app.post("/analyze")
     async def analyze(request: AnalyzeRequest) -> dict[str, str]:
@@ -120,6 +131,21 @@ def create_app(
             except Exception as exc:  # noqa: BLE001 - report, don't crash the server
                 log.error("analysis_failed", error=str(exc))
                 run.queue.put_nowait(PipelineEvent(stage="error", detail=str(exc)))
+            else:
+                # Recents registry is best-effort: a write failure must never
+                # break a completed analysis.
+                try:
+                    entry = RecentEntry(
+                        repo_path=str(repo),
+                        name=repo.name,
+                        analyzed_at=datetime.now(UTC).isoformat(),
+                        modules=len(graph.nodes),
+                        packages=len(graph.packages),
+                        languages=sorted({n.language for n in graph.nodes}),
+                    )
+                    await asyncio.to_thread(upsert_recent, recents_path, entry)
+                except Exception as exc:  # noqa: BLE001 - recents are best-effort
+                    log.warning("recents_update_failed", error=str(exc))
             finally:
                 run.done = True
 
@@ -166,6 +192,60 @@ def create_app(
             "dependencies": dependencies,
             "dependents": dependents,
         }
+
+    @app.get("/recent")
+    async def get_recent() -> dict[str, list[dict[str, Any]]]:
+        def load_existing() -> list[RecentEntry]:
+            # Entries whose repos vanished are hidden, not deleted: if the
+            # path comes back (network drive, restored checkout) so does the card.
+            return [e for e in load_recents(recents_path) if Path(e.repo_path).is_dir()]
+
+        entries = await asyncio.to_thread(load_existing)
+        return {"recents": [e.model_dump() for e in entries]}
+
+    @app.get("/fs")
+    async def browse_fs(path: str = "") -> dict[str, Any]:
+        # Security note: this is a localhost-scoped instrument by design (CORS
+        # is already restricted to the local UI), so it carries no auth — but it
+        # never lists files, only directories, and null bytes are rejected
+        # before they can reach os.stat.
+        if "\x00" in path:
+            raise HTTPException(status_code=404, detail="Invalid path")
+
+        def list_dirs() -> dict[str, Any] | None:
+            if path:
+                target = Path(path).resolve()
+            else:
+                repos = Path("/repos")  # Docker volume convention
+                target = repos.resolve() if repos.is_dir() else Path.home()
+            if not target.is_dir():
+                return None
+            dirs: list[dict[str, str]] = []
+            try:
+                children = list(target.iterdir())
+            except PermissionError:
+                children = []
+            for child in children:
+                if child.name.startswith(".") or child.name in _FS_JUNK_DIRS:
+                    continue
+                try:
+                    if not child.is_dir():
+                        continue
+                except OSError:
+                    continue  # unreadable entry: skip silently
+                dirs.append({"name": child.name, "path": str(child)})
+            dirs.sort(key=lambda d: d["name"].lower())
+            parent = target.parent
+            return {
+                "path": str(target),
+                "parent": None if parent == target else str(parent),
+                "dirs": dirs,
+            }
+
+        listing = await asyncio.to_thread(list_dirs)
+        if listing is None:
+            raise HTTPException(status_code=404, detail=f"Not a directory: {path}")
+        return listing
 
     @app.post("/chat")
     async def chat(request: ChatRequest) -> EventSourceResponse:

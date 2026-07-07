@@ -1,6 +1,7 @@
 import asyncio
 import json
 import shutil
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -8,11 +9,19 @@ import httpx
 import pytest
 
 from codemap.api.app import AnalysisRun, create_app
+from codemap.api.recents import load_recents, upsert_recent
 from codemap.pipeline import Pipeline
 from tests.test_index import fake_embed
 from tests.test_pipeline import FakeLLM, make_settings
+from tests.test_recents import make_entry
 
 FIXTURE = Path(__file__).parent / "fixtures" / "demo_repo"
+
+
+@pytest.fixture(autouse=True)
+def _isolated_recents(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep every API test's recents registry inside tmp_path, never ~/.codemap."""
+    monkeypatch.setenv("RECENTS_PATH", str(tmp_path / "recents.json"))
 
 
 @pytest.fixture
@@ -20,6 +29,14 @@ def repo(tmp_path: Path) -> Path:
     dest = tmp_path / "repo"
     shutil.copytree(FIXTURE, dest, ignore=shutil.ignore_patterns(".codemap"))
     return dest
+
+
+async def wait_done(app: Any, analysis_id: str) -> None:
+    for _ in range(100):
+        if app.state.analyses[analysis_id].done:
+            return
+        await asyncio.sleep(0.05)
+    raise AssertionError("analysis did not finish")
 
 
 def make_client() -> tuple[httpx.AsyncClient, Any]:
@@ -256,3 +273,122 @@ async def test_analyze_events_stream_closes_after_error(
         # exactly one error event, and the stream ended on its own (loop above returned)
         assert stages == ["error"]
         assert app.state.analyses[analysis_id].done
+
+
+async def test_recent_lists_analyzed_repo(repo: Path) -> None:
+    client, app = make_client()
+    async with client:
+        analysis_id = (
+            await client.post("/analyze", json={"repo_path": str(repo)})
+        ).json()["analysis_id"]
+        await wait_done(app, analysis_id)
+
+        graph = (await client.get("/graph")).json()
+        response = await client.get("/recent")
+        assert response.status_code == 200
+        recents = response.json()["recents"]
+        assert len(recents) == 1
+        entry = recents[0]
+        assert entry["repo_path"] == str(repo.resolve())
+        assert entry["name"] == repo.name
+        assert entry["modules"] == len(graph["nodes"]) == 10
+        assert entry["packages"] == len(graph["packages"])
+        assert entry["languages"] == ["python"]
+        analyzed_at = datetime.fromisoformat(entry["analyzed_at"])
+        assert analyzed_at.tzinfo is not None
+        assert analyzed_at.utcoffset() == datetime.now(UTC).utcoffset()
+
+
+async def test_recent_filters_missing_paths_without_deleting(
+    repo: Path, tmp_path: Path
+) -> None:
+    client, app = make_client()
+    registry: Path = app.state.settings.recents_path
+    ghost = make_entry(str(tmp_path / "gone"), name="gone")
+    upsert_recent(registry, ghost)
+    async with client:
+        analysis_id = (
+            await client.post("/analyze", json={"repo_path": str(repo)})
+        ).json()["analysis_id"]
+        await wait_done(app, analysis_id)
+
+        recents = (await client.get("/recent")).json()["recents"]
+        assert [e["repo_path"] for e in recents] == [str(repo.resolve())]
+
+    # the ghost entry is filtered from the response but never deleted from disk
+    on_disk = {e.repo_path for e in load_recents(registry)}
+    assert on_disk == {str(repo.resolve()), ghost.repo_path}
+
+
+async def test_recents_write_failure_never_breaks_analysis(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def boom(*_args: Any, **_kwargs: Any) -> None:
+        raise OSError("disk full")
+
+    monkeypatch.setattr("codemap.api.app.upsert_recent", boom)
+    client, app = make_client()
+    async with client:
+        analysis_id = (
+            await client.post("/analyze", json={"repo_path": str(repo)})
+        ).json()["analysis_id"]
+        await wait_done(app, analysis_id)
+
+        graph = await client.get("/graph")
+        assert graph.status_code == 200
+        assert len(graph.json()["nodes"]) == 10
+        assert (await client.get("/recent")).json()["recents"] == []
+
+
+async def test_fs_lists_directories_only_sorted(tmp_path: Path) -> None:
+    (tmp_path / "beta").mkdir()
+    (tmp_path / "Alpha").mkdir()
+    (tmp_path / ".hidden").mkdir()
+    (tmp_path / "__pycache__").mkdir()
+    (tmp_path / "node_modules").mkdir()
+    (tmp_path / "notes.txt").write_text("not a directory")
+    client, _ = make_client()
+    async with client:
+        response = await client.get("/fs", params={"path": str(tmp_path)})
+        assert response.status_code == 200
+        body = response.json()
+        assert body["path"] == str(tmp_path)
+        assert body["parent"] == str(tmp_path.parent)
+        assert [d["name"] for d in body["dirs"]] == ["Alpha", "beta"]  # case-insensitive sort
+        assert body["dirs"][0]["path"] == str(tmp_path / "Alpha")
+
+
+async def test_fs_404_on_file_or_missing_path(tmp_path: Path) -> None:
+    file_path = tmp_path / "notes.txt"
+    file_path.write_text("not a directory")
+    client, _ = make_client()
+    async with client:
+        assert (await client.get("/fs", params={"path": str(file_path)})).status_code == 404
+        missing = tmp_path / "nope"
+        assert (await client.get("/fs", params={"path": str(missing)})).status_code == 404
+
+
+async def test_fs_parent_is_none_at_filesystem_root(tmp_path: Path) -> None:
+    root = Path(tmp_path.anchor)  # e.g. C:\ on Windows, / on POSIX
+    client, _ = make_client()
+    async with client:
+        response = await client.get("/fs", params={"path": str(root)})
+        assert response.status_code == 200
+        assert response.json()["parent"] is None
+
+
+async def test_fs_rejects_null_bytes() -> None:
+    client, _ = make_client()
+    async with client:
+        response = await client.get("/fs", params={"path": "C:/x\x00y"})
+        assert response.status_code == 404
+
+
+async def test_fs_empty_path_defaults_to_repos_or_home() -> None:
+    repos = Path("/repos")
+    expected = repos.resolve() if repos.is_dir() else Path.home()
+    client, _ = make_client()
+    async with client:
+        response = await client.get("/fs")
+        assert response.status_code == 200
+        assert response.json()["path"] == str(expected)
