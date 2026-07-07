@@ -69,20 +69,39 @@ export default function GraphScene() {
     return set;
   }, [selectedId, graph]);
 
+  // One-way latch: once the user selects a node, the orbital establishing shot stops
+  // for the lifetime of this mount — deselecting must NOT resume the orbit and hijack
+  // manual camera controls. A ref resets naturally on remount, restoring the orbit.
+  const engaged = useRef(false);
+
   useEffect(() => {
     const fg = fgRef.current;
     if (!fg) return;
     const bloom = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 1.6, 0.8, 0.1);
     fg.postProcessingComposer().addPass(bloom);
-    fg.scene().add(makeStarfield());
+    const starfield = makeStarfield();
+    fg.scene().add(starfield);
     // slow orbital establishing shot
     let angle = 0;
     const orbit = setInterval(() => {
-      if (useStore.getState().selectedId) return; // stop orbiting once user engages
+      if (engaged.current || useStore.getState().selectedId) {
+        engaged.current = true; // latch off permanently at first selection
+        return;
+      }
       angle += 0.002;
       fg.cameraPosition({ x: 420 * Math.sin(angle), y: 60, z: 420 * Math.cos(angle) });
     }, 40);
-    return () => clearInterval(orbit);
+    // Fully undo the scene additions: under StrictMode (dev double-invokes mount
+    // effects) and HMR, a cleanup that only clears the interval would stack bloom
+    // passes and starfields on every re-run. Also disposes the starfield's GPU
+    // resources, which scene.remove() alone does not free.
+    return () => {
+      clearInterval(orbit);
+      fg.postProcessingComposer().removePass(bloom);
+      fg.scene().remove(starfield);
+      starfield.geometry.dispose();
+      (starfield.material as THREE.Material).dispose();
+    };
   }, []);
 
   // Selection dimming is computed inside `nodeThreeObject`, which the library only
