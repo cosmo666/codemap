@@ -25,13 +25,36 @@ DEMO = Path(__file__).parent / "fixtures" / "demo_repo"
 
 def test_discover_source_files_polyglot() -> None:
     rels = [f.relative_to(POLYGLOT).as_posix() for f in discover_source_files(POLYGLOT)]
-    assert rels == [
-        "scripts/tool.lua",
-        "web/api.ts",
-        "web/broken.ts",
-        "web/components/index.ts",
-        "web/util.js",
-    ]
+    # sorted() both sides: Path ordering is case-insensitive only on Windows
+    assert sorted(rels) == sorted(
+        [
+            "c/src/main.c",
+            "c/src/util/strings.c",
+            "c/src/util/strings.h",
+            "cpp/geometry.hpp",
+            "cpp/main.cpp",
+            "csharp/Acme/App/Program.cs",
+            "csharp/Acme/Util/Strings.cs",
+            "go/main.go",  # go.mod itself is not a node
+            "go/util/count.go",
+            "go/util/strings.go",
+            "java/com/acme/app/Main.java",
+            "java/com/acme/util/Strings.java",
+            "php/src/Util/Strings.php",
+            "php/src/index.php",
+            "ruby/app.rb",
+            "ruby/lib/greeter.rb",
+            "rust/src/helpers.rs",
+            "rust/src/main.rs",
+            "rust/src/util/geometry.rs",
+            "rust/src/util/mod.rs",
+            "scripts/tool.lua",
+            "web/api.ts",
+            "web/broken.ts",
+            "web/components/index.ts",
+            "web/util.js",
+        ]
+    )
 
 
 def test_discover_skips_minified_and_huge(tmp_path: Path) -> None:
@@ -121,17 +144,40 @@ def test_universal_lua_gets_symbols_no_imports() -> None:
 def test_polyglot_graph_edges_exact() -> None:
     graph = build_graph(parse_repo(POLYGLOT))
     by_id = {n.id: n for n in graph.nodes}
-    assert len(graph.nodes) == 5
+    assert len(graph.nodes) == 25
     assert by_id["web/api.ts"].language == "typescript"
     assert by_id["web/util.js"].language == "javascript"
     assert by_id["scripts/tool.lua"].language == "lua"
     assert by_id["web/broken.ts"].status == "parse_error"
+    assert by_id["c/src/util/strings.h"].language == "c"
+    assert by_id["cpp/geometry.hpp"].language == "cpp"
     edge_set = {(e.source, e.target) for e in graph.edges}
     assert edge_set == {
+        # JS/TS
         ("web/api.ts", "web/util.js"),  # TS -> JS
         ("web/api.ts", "web/components/index.ts"),  # TS -> TS via index collapse
         ("web/components/index.ts", "web/util.js"),  # TS -> JS
         ("web/util.js", "web/components/index.ts"),  # JS -> TS via require
+        # Go: package import fans out to every file in the package dir
+        ("go/main.go", "go/util/count.go"),
+        ("go/main.go", "go/util/strings.go"),
+        # Java
+        ("java/com/acme/app/Main.java", "java/com/acme/util/Strings.java"),
+        # Rust
+        ("rust/src/main.rs", "rust/src/helpers.rs"),
+        ("rust/src/main.rs", "rust/src/util/mod.rs"),
+        ("rust/src/main.rs", "rust/src/util/geometry.rs"),
+        ("rust/src/util/mod.rs", "rust/src/util/geometry.rs"),
+        ("rust/src/util/geometry.rs", "rust/src/helpers.rs"),
+        # C#
+        ("csharp/Acme/App/Program.cs", "csharp/Acme/Util/Strings.cs"),
+        # C / C++
+        ("c/src/main.c", "c/src/util/strings.h"),
+        ("c/src/util/strings.c", "c/src/util/strings.h"),
+        ("cpp/main.cpp", "cpp/geometry.hpp"),
+        # Ruby / PHP
+        ("ruby/app.rb", "ruby/lib/greeter.rb"),
+        ("php/src/index.php", "php/src/Util/Strings.php"),
     }
     # universal-tier node has no edges at all
     assert not any("tool.lua" in e.source or "tool.lua" in e.target for e in graph.edges)
@@ -226,4 +272,16 @@ async def test_pipeline_polyglot_end_to_end(tmp_path: Path) -> None:
     assert index.search("panel", k=2)
     reloaded = Store(repo).load_graph()
     assert reloaded is not None
-    assert {n.language for n in reloaded.nodes} == {"typescript", "javascript", "lua"}
+    assert {n.language for n in reloaded.nodes} == {
+        "typescript",
+        "javascript",
+        "lua",
+        "go",
+        "java",
+        "rust",
+        "csharp",
+        "c",
+        "cpp",
+        "ruby",
+        "php",
+    }

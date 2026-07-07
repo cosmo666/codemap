@@ -140,7 +140,7 @@ def _clean_comment(text: str) -> str:
     cleaned: list[str] = []
     for raw in text.splitlines():
         line = raw.strip()
-        if line.startswith("/**"):
+        if line.startswith(("/**", "///")):
             line = line[3:]
         elif line.startswith(("/*", "//", "--")):
             line = line[2:]
@@ -148,7 +148,8 @@ def _clean_comment(text: str) -> str:
             line = line[1:]
         if line.endswith("*/"):
             line = line[:-2]
-        line = line.strip()
+        # C# XML doc wrappers add noise without adding meaning.
+        line = line.replace("<summary>", "").replace("</summary>", "").strip()
         if line:
             cleaned.append(line)
     return " ".join(cleaned)
@@ -195,12 +196,10 @@ def _ts_imports(spec: LanguageSpec, root: Node, repo: Path, file: Path) -> list[
     query = _compile_query(spec.ts_language, spec.import_query)
     modules: set[str] = set()
     for node in QueryCursor(query).captures(root).get("import", []):
-        target = spec.resolve_import(repo, file, _decode(node))
-        if target is None:
-            continue
-        target_spec = EXT_TO_LANGUAGE.get(target.suffix.lower())
-        if target_spec is not None:
-            modules.add(target_spec.module_name(repo, target))
+        for target in spec.resolve_import(repo, file, _decode(node)):
+            target_spec = EXT_TO_LANGUAGE.get(target.suffix.lower())
+            if target_spec is not None:
+                modules.add(target_spec.module_name(repo, target))
     return sorted(modules)
 
 
