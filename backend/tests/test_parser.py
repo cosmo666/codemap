@@ -28,6 +28,8 @@ def test_parse_repo_fixture() -> None:
     assert [c.name for c in engine.classes] == ["Engine"]
     assert [m.name for m in engine.classes[0].methods] == ["__init__", "start", "stop"]
     assert engine.classes[0].docstring == "Runs jobs for authenticated sessions."
+    start_method = next(m for m in engine.classes[0].methods if m.name == "start")
+    assert start_method.signature == "def start(self, config: dict)"
     broken = by_path["app/broken.py"].info
     assert broken.status == "parse_error"
     assert broken.classes == [] and broken.functions == []

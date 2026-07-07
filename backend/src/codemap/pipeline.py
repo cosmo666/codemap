@@ -1,9 +1,9 @@
 import asyncio
+import json
 from collections.abc import Callable
 from pathlib import Path
 from typing import Literal
 
-import structlog
 from pydantic import BaseModel
 
 from codemap.analyzer.graph import GraphData, build_graph
@@ -14,8 +14,6 @@ from codemap.explainer.explainer import Explainer, SupportsComplete
 from codemap.indexer.chunker import Chunk, chunk_module, chunk_summaries
 from codemap.indexer.index import EmbedFn, VectorIndex
 from codemap.llm.client import LLMClient
-
-log = structlog.get_logger()
 
 
 class PipelineEvent(BaseModel):
@@ -46,8 +44,6 @@ class Store:
         return GraphData.model_validate_json(path.read_text("utf-8"))
 
     def save_explanations(self, modules: dict[str, str], packages: dict[str, str]) -> None:
-        import json
-
         self.dir.mkdir(parents=True, exist_ok=True)
         payload = {"modules": modules, "packages": packages}
         (self.dir / "explanations.json").write_text(json.dumps(payload, indent=2), "utf-8")
@@ -62,7 +58,6 @@ class Pipeline:
         llm: SupportsComplete | None = None,
         embed_fn: EmbedFn | None = None,
     ) -> None:
-        self._settings = settings
         self._llm = llm or LLMClient(settings)
         self._embed_fn = embed_fn
 

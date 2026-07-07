@@ -7,7 +7,7 @@ from typing import Any
 import httpx
 import pytest
 
-from codemap.api.app import create_app
+from codemap.api.app import AnalysisRun, create_app
 from codemap.pipeline import Pipeline
 from tests.test_index import fake_embed
 from tests.test_pipeline import FakeLLM, make_settings
@@ -54,6 +54,30 @@ async def test_analyze_then_graph_and_module(repo: Path) -> None:
         assert "app/main.py" in detail["dependents"]
 
 
+async def test_warm_start_serves_persisted_graph_immediately(repo: Path) -> None:
+    client1, app1 = make_client()
+    async with client1:
+        analysis_id = (
+            await client1.post("/analyze", json={"repo_path": str(repo)})
+        ).json()["analysis_id"]
+        for _ in range(100):
+            if app1.state.analyses[analysis_id].done:
+                break
+            await asyncio.sleep(0.05)
+        assert app1.state.analyses[analysis_id].done
+
+    # Second app instance, same repo (now has .codemap/ artifacts on disk from the run above).
+    client2, app2 = make_client()
+    async with client2:
+        response = await client2.post("/analyze", json={"repo_path": str(repo)})
+        assert response.status_code == 200
+
+        # Immediately (before the background pipeline task finishes) the persisted
+        # graph should already be visible via warm-start.
+        graph = (await client2.get("/graph")).json()
+        assert len(graph["nodes"]) == 10
+
+
 async def test_analyze_missing_path() -> None:
     client, _ = make_client()
     async with client:
@@ -65,6 +89,42 @@ async def test_graph_before_analyze_is_404() -> None:
     client, _ = make_client()
     async with client:
         assert (await client.get("/graph")).status_code == 404
+
+
+async def test_chat_history_rejects_invalid_role() -> None:
+    client, _ = make_client()
+    async with client:
+        response = await client.post(
+            "/chat",
+            json={
+                "question": "hi",
+                "history": [{"role": "system", "content": "not allowed"}],
+            },
+        )
+        assert response.status_code == 422
+
+
+async def test_evicts_old_done_analyses(repo: Path) -> None:
+    client, app = make_client()
+    async with client:
+        for i in range(8):
+            app.state.analyses[f"fake-{i}"] = AnalysisRun(done=True)
+
+        response = await client.post("/analyze", json={"repo_path": str(repo)})
+        assert response.status_code == 200
+        analysis_id = response.json()["analysis_id"]
+
+        # 5 most-recent DONE fake runs survive, plus the freshly registered (unfinished) run
+        assert len(app.state.analyses) == 6
+        fake_ids = [aid for aid in app.state.analyses if aid.startswith("fake-")]
+        assert fake_ids == [f"fake-{i}" for i in range(3, 8)]
+        assert analysis_id in app.state.analyses
+
+        for _ in range(100):
+            if app.state.analyses[analysis_id].done:
+                break
+            await asyncio.sleep(0.05)
+        assert app.state.analyses[analysis_id].done
 
 
 async def test_analyze_events_stream_and_404s(repo: Path) -> None:
@@ -90,3 +150,30 @@ async def test_analyze_events_stream_and_404s(repo: Path) -> None:
         assert stages[-1] == "done"
 
         assert (await client.get("/module/not/a/module.py")).status_code == 404
+
+
+async def test_analyze_events_stream_closes_after_error(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client, app = make_client()
+
+    async def boom(*_args: Any, **_kwargs: Any) -> Any:
+        raise RuntimeError("pipeline exploded")
+
+    monkeypatch.setattr(app.state.pipeline, "run", boom)
+    async with client:
+        analysis_id = (
+            await client.post("/analyze", json={"repo_path": str(repo)})
+        ).json()["analysis_id"]
+
+        stages: list[str] = []
+        async with client.stream("GET", f"/analyze/{analysis_id}/events") as response:
+            assert response.status_code == 200
+            async for line in response.aiter_lines():
+                if line.startswith("data:"):
+                    event = json.loads(line[5:].strip())
+                    stages.append(event["stage"])
+
+        # exactly one error event, and the stream ended on its own (loop above returned)
+        assert stages == ["error"]
+        assert app.state.analyses[analysis_id].done

@@ -53,3 +53,17 @@ def test_build_empty_chunks_is_safe() -> None:
     index = VectorIndex(embed_fn=fake_embed)
     index.build([])
     assert index.search("anything") == []
+
+
+def zero_embed(texts: list[str]) -> np.ndarray:
+    return np.zeros((len(texts), 32), dtype=np.float32)
+
+
+def test_all_zero_embeddings_do_not_crash() -> None:
+    chunks = [make_chunk("auth", "def login(): ..."), make_chunk("db", "def query(): ...")]
+    index = VectorIndex(embed_fn=zero_embed)
+    index.build(chunks)
+    results = index.search("anything", k=2)
+    assert len(results) == 2
+    for _chunk, score in results:
+        assert np.isfinite(score)

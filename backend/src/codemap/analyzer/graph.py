@@ -1,3 +1,5 @@
+from typing import Literal
+
 import networkx as nx
 from pydantic import BaseModel
 
@@ -9,7 +11,7 @@ class GraphNode(BaseModel):
     module: str
     package: str
     loc: int
-    status: str
+    status: Literal["ok", "parse_error"]
     centrality: float
     explanation: str | None = None
 

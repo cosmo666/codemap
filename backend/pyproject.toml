@@ -52,5 +52,5 @@ src = ["src", "tests"]
 exclude = ["tests/fixtures"]
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "UP", "B", "SIM", "ANN"]
+select = ["E", "F", "I", "UP", "B", "SIM", "ANN", "BLE"]
 ignore = ["ANN401"]

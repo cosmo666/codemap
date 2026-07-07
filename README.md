@@ -35,8 +35,10 @@ before `up` — it's read at container start, not at build time.
 
 ## Development
 
-- Backend (from `backend/`): `pytest` (30 tests), `ruff check .`, `mypy` (all strict;
+- Backend (from `backend/`): `pytest` (40 tests), `ruff check .`, `mypy` (all strict;
   tests never hit the network).
+- Backend dependency versions are pinned in `backend/constraints.txt`
+  (`pip freeze --exclude-editable`); CI installs with `-c constraints.txt` for reproducible builds.
 - Frontend (from `frontend/`): `npx eslint src`, `npx tsc --noEmit`, `npm run build`.
 - Artifacts land in `<analyzed-repo>/.codemap/` — all human-readable JSON + FAISS.
 - `docker compose build` builds both images without needing `backend/.env`

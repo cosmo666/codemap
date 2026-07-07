@@ -7,8 +7,13 @@ async function json<T>(response: Response): Promise<T> {
 
 export const fetchGraph = (): Promise<GraphData> => fetch('/graph').then((r) => json<GraphData>(r));
 
+// Encode per-segment (not the whole path) so slashes survive: the backend route is
+// `{path:path}`, and while Starlette decodes %2F there, proxies in front of it (e.g.
+// nginx) may reject encoded slashes outright.
 export const fetchModule = (path: string): Promise<ModuleDetail> =>
-  fetch(`/module/${path}`).then((r) => json<ModuleDetail>(r));
+  fetch(`/module/${path.split('/').map(encodeURIComponent).join('/')}`).then((r) =>
+    json<ModuleDetail>(r),
+  );
 
 export async function startAnalyze(repoPath: string): Promise<string> {
   const r = await fetch('/analyze', {

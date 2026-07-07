@@ -35,23 +35,27 @@ class VectorIndex:
     """FAISS inner-product index over normalized vectors (= cosine similarity)."""
 
     def __init__(self, embed_fn: EmbedFn | None = None) -> None:
-        self._embed_fn = embed_fn or _default_embed_fn()
+        self._embed_fn: EmbedFn | None = embed_fn
         self._chunks: list[Chunk] = []
         self._index: faiss.Index | None = None
+
+    def _embedder(self) -> EmbedFn:
+        self._embed_fn = self._embed_fn or _default_embed_fn()
+        return self._embed_fn
 
     def build(self, chunks: list[Chunk]) -> None:
         self._chunks = chunks
         if not chunks:
             self._index = None
             return
-        vectors = _normalize(self._embed_fn([c.text[:_EMBED_CHARS] for c in chunks]))
+        vectors = _normalize(self._embedder()([c.text[:_EMBED_CHARS] for c in chunks]))
         self._index = faiss.IndexFlatIP(vectors.shape[1])
         self._index.add(vectors)
 
     def search(self, query: str, k: int = 8) -> list[tuple[Chunk, float]]:
         if self._index is None or not self._chunks:
             return []
-        vector = _normalize(self._embed_fn([query]))
+        vector = _normalize(self._embedder()([query]))
         scores, ids = self._index.search(vector, min(k, len(self._chunks)))
         return [
             (self._chunks[i], float(s))
@@ -61,7 +65,8 @@ class VectorIndex:
 
     def save(self, directory: Path) -> None:
         directory.mkdir(parents=True, exist_ok=True)
-        assert self._index is not None
+        if self._index is None:
+            raise RuntimeError("build() must run before save()")
         faiss.write_index(self._index, str(directory / _INDEX_FILE))
         (directory / _CHUNKS_FILE).write_text(
             json.dumps([c.model_dump() for c in self._chunks]), encoding="utf-8"

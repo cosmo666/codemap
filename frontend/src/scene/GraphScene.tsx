@@ -113,9 +113,15 @@ export default function GraphScene() {
 
   const flyToNode = useCallback((node: SceneNode) => {
     const fg = fgRef.current;
+    // Pre-simulation (x still undefined) we simply no-op rather than flying to the
+    // origin or queuing the shot — an acceptable tradeoff since node click targets
+    // are unreachable until the force simulation has placed them anyway.
     if (!fg || node.x === undefined) return;
     const distance = 90;
-    const ratio = 1 + distance / Math.hypot(node.x, node.y ?? 0, node.z ?? 0);
+    // Clamp the denominator so a node sitting at (or very near) the origin doesn't
+    // blow up the ratio (division by ~0) and send the camera to infinity.
+    const dist = Math.max(Math.hypot(node.x, node.y ?? 0, node.z ?? 0), 1);
+    const ratio = 1 + distance / dist;
     fg.cameraPosition(
       { x: node.x * ratio, y: (node.y ?? 0) * ratio, z: (node.z ?? 0) * ratio },
       { x: node.x, y: node.y ?? 0, z: node.z ?? 0 },

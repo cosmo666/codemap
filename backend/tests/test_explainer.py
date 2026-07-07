@@ -3,7 +3,7 @@ from typing import Any
 
 from codemap.analyzer.parser import parse_repo
 from codemap.explainer.cache import ExplanationCache
-from codemap.explainer.explainer import Explainer
+from codemap.explainer.explainer import PACKAGE_SYSTEM, Explainer
 
 FIXTURE = Path(__file__).parent / "fixtures" / "demo_repo"
 
@@ -47,6 +47,25 @@ async def test_explain_all_survives_single_failure(tmp_path: Path) -> None:
     result = await explainer.explain_all(parsed, lambda c, t, d: None)
     assert "app/core/engine.py" not in result  # unexplained, not fatal
     assert "app/auth/session.py" in result
+
+
+class PackageFailingLLM(FakeLLM):
+    async def complete(self, system: str, user: str) -> str:
+        if "Summarize this Python package" in system:
+            raise RuntimeError("package summary exploded")
+        return await super().complete(system, user)
+
+
+async def test_summarize_packages_survives_failure(tmp_path: Path) -> None:
+    assert "Summarize this Python package" in PACKAGE_SYSTEM  # keep test tied to real prompt
+    parsed = parse_repo(FIXTURE)
+    llm: Any = PackageFailingLLM()
+    explainer = Explainer(llm, ExplanationCache(tmp_path / "c.json"))
+    explanations = await explainer.explain_all(parsed, lambda c, t, d: None)
+    # Must not raise even though every package summary call fails.
+    packages = await explainer.summarize_packages(explanations, parsed)
+    assert "app" not in packages  # the one package in the fixture is omitted, not crashed on
+    assert packages == {}
 
 
 async def test_reduce_stages(tmp_path: Path) -> None:

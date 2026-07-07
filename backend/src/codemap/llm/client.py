@@ -27,7 +27,10 @@ class LLMClient:
         self._semaphore = asyncio.Semaphore(settings.max_concurrency)
 
     async def complete(self, system: str, user: str) -> str:
-        messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
+        messages: list[ChatMessage] = [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ]
         async with self._semaphore:
             for attempt in range(_MAX_RETRIES + 1):
                 try:

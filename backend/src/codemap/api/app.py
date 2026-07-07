@@ -4,18 +4,20 @@ import uuid
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Literal
 
 import structlog
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 
 from codemap.api.chat import CHAT_SYSTEM_PROMPT, build_context, extract_new_citations
 from codemap.config import Settings
+from codemap.indexer.index import VectorIndex
 from codemap.llm.client import LLMClient
 from codemap.logging import configure_logging
-from codemap.pipeline import Pipeline, PipelineEvent
+from codemap.pipeline import Pipeline, PipelineEvent, Store
 
 log = structlog.get_logger()
 
@@ -24,9 +26,14 @@ class AnalyzeRequest(BaseModel):
     repo_path: str
 
 
+class ChatTurn(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str
+
+
 class ChatRequest(BaseModel):
     question: str
-    history: list[dict[str, str]] = []
+    history: list[ChatTurn] = Field(default_factory=list, max_length=50)
 
 
 @dataclass
@@ -34,6 +41,19 @@ class AnalysisRun:
     queue: asyncio.Queue[PipelineEvent] = field(default_factory=asyncio.Queue)
     done: bool = False
     task: asyncio.Task[None] | None = None
+
+
+_MAX_DONE_ANALYSES = 5
+
+
+def _prune_finished_analyses(
+    analyses: dict[str, AnalysisRun], keep: int = _MAX_DONE_ANALYSES
+) -> None:
+    """Evict the oldest DONE runs beyond `keep`; unfinished runs are never touched."""
+    done_ids = [analysis_id for analysis_id, run in analyses.items() if run.done]
+    excess = len(done_ids) - keep
+    for analysis_id in done_ids[:excess]:
+        del analyses[analysis_id]
 
 
 def create_app(
@@ -62,9 +82,24 @@ def create_app(
         repo = Path(request.repo_path)
         if not repo.is_dir():
             raise HTTPException(status_code=404, detail=f"Not a directory: {repo}")
+
+        # Warm-start: if this repo was analyzed before, serve the persisted graph/index
+        # immediately so the UI has data while the fresh analysis runs in the background.
+        store = Store(repo)
+        graph = store.load_graph()
+        if graph is not None and (store.dir / "index.faiss").exists():
+            try:
+                index = await asyncio.to_thread(VectorIndex.load, store.dir)
+            except Exception as exc:  # noqa: BLE001 - warm-start is best-effort
+                log.warning("warm_start_failed", error=str(exc))
+            else:
+                app.state.graph = graph
+                app.state.index = index
+
         analysis_id = uuid.uuid4().hex[:12]
         run = AnalysisRun()
         app.state.analyses[analysis_id] = run
+        _prune_finished_analyses(app.state.analyses)
         loop = asyncio.get_running_loop()
 
         def on_event(event: PipelineEvent) -> None:
@@ -137,8 +172,9 @@ def create_app(
             buffer = ""
             user = f"{context}\n\nQUESTION: {request.question}"
             try:
+                history = [{"role": t.role, "content": t.content} for t in request.history]
                 async for token in app.state.llm.stream(
-                    CHAT_SYSTEM_PROMPT, user, history=request.history
+                    CHAT_SYSTEM_PROMPT, user, history=history
                 ):
                     buffer += token
                     yield {"data": json.dumps({"type": "token", "content": token})}
