@@ -74,7 +74,8 @@ class Pipeline:
         graph = build_graph(parsed)
 
         explainer = Explainer(self._llm, ExplanationCache(store.cache_path))
-        on_event(PipelineEvent(stage="explaining", current=0, total=len(parsed)))
+        ok_total = sum(1 for p in parsed if p.info.status == "ok")
+        on_event(PipelineEvent(stage="explaining", current=0, total=ok_total))
         explanations = await explainer.explain_all(
             parsed,
             lambda c, t, d: on_event(
