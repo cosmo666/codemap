@@ -12,6 +12,10 @@ export interface GraphNode {
 export interface GraphEdge {
   source: string;
   target: string;
+  /** "import": a real resolved dependency. "structural": folder-sibling
+   * connectivity with no resolvable import - keeps the map from reading as a
+   * disconnected point cloud without claiming a dependency that isn't there. */
+  kind: 'import' | 'structural';
 }
 
 export interface GraphData {

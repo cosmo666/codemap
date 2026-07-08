@@ -9,7 +9,11 @@ import { useStore } from '../store/store';
 import { ERROR_COLOR, packageColor } from './colors';
 
 type SceneNode = NodeObject<GraphNode>;
-type SceneLink = LinkObject<GraphNode>;
+// LinkObject's generic only parameterizes source/target node typing; the extra
+// `kind` field we send is preserved by 3d-force-graph as a pass-through
+// property, so it's added here via intersection rather than fighting the
+// library's link-data generics.
+type SceneLink = LinkObject<GraphNode> & { kind: 'import' | 'structural' };
 
 // react-force-graph-3d's default export is a generic function component (see its
 // `FCwithRef` type), but its exported prop/ref types wrap the NodeType parameter in an
@@ -56,7 +60,7 @@ export default function GraphScene() {
     if (!graph) return { nodes: [], links: [] };
     return {
       nodes: graph.nodes.map((n) => ({ ...n })),
-      links: graph.edges.map((e) => ({ source: e.source, target: e.target })),
+      links: graph.edges.map((e) => ({ source: e.source, target: e.target, kind: e.kind })),
     };
   }, [graph]);
 
@@ -68,7 +72,11 @@ export default function GraphScene() {
     const set = new Set<string>();
     if (selectedId && graph) {
       set.add(selectedId);
+      // Only real dependencies spotlight on selection - folder-sibling
+      // "structural" edges are connective tissue, not a relationship worth
+      // highlighting (and would dilute the "what does this depend on" signal).
       for (const e of graph.edges) {
+        if (e.kind !== 'import') continue;
         if (e.source === selectedId) set.add(e.target);
         if (e.target === selectedId) set.add(e.source);
       }
@@ -214,9 +222,15 @@ export default function GraphScene() {
         }}
         nodeThreeObjectExtend={false}
         nodeLabel={(node) => node.module}
-        linkColor={() => '#3a4a7a'}
+        // Import edges are bright, particle-animated dependency lines; structural
+        // (folder-sibling) edges are dim, static connective tissue - present so the
+        // map never reads as a disconnected point cloud, but never mistaken for a
+        // claimed dependency (no particles = no implied direction of data flow).
+        linkColor={(link) => ((link as SceneLink).kind === 'structural' ? '#1c2442' : '#3a4a7a')}
         linkOpacity={0.35}
-        linkDirectionalParticles={reduceMotion ? 0 : 2}
+        linkDirectionalParticles={(link) =>
+          reduceMotion || (link as SceneLink).kind === 'structural' ? 0 : 2
+        }
         linkDirectionalParticleSpeed={reduceMotion ? 0 : 0.006}
         linkDirectionalParticleWidth={1.6}
         onNodeClick={(node) => {

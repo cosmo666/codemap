@@ -17,10 +17,13 @@ def _graph() -> GraphData:
 
 
 def _edges(prefix: str) -> set[tuple[str, str]]:
+    # These tests are exact-import-resolution assertions; the separate
+    # folder-sibling "structural" edges (see test_graph.py) are out of scope
+    # here and would make every exact set spuriously larger.
     return {
         (e.source, e.target)
         for e in _graph().edges
-        if e.source.startswith(prefix) or e.target.startswith(prefix)
+        if e.kind == "import" and (e.source.startswith(prefix) or e.target.startswith(prefix))
     }
 
 
@@ -136,8 +139,24 @@ def test_csharp_symbols_and_edges() -> None:
     assert cls.name == "Strings" and cls.docstring == "String helpers."
     assert [m.name for m in cls.methods] == ["Upper"]
     assert cls.methods[0].docstring == "Upper-cases a value."
-    assert _edges("csharp/") == {
+    assert _edges("csharp/Acme") == {
         ("csharp/Acme/App/Program.cs", "csharp/Acme/Util/Strings.cs")
+    }
+
+
+def test_csharp_dotted_project_folder_resolves() -> None:
+    # Real-world .NET convention: the project ROOT namespace segment(s) collapse
+    # into a single folder name that contains literal dots (e.g. "Statements.Core",
+    # matching the .csproj's RootNamespace), NOT a nested Statements/Core/ path as
+    # Java's package convention would assume. `using Statements.Core.Batch;` from a
+    # sibling project (`DpSecure.Web`) must still resolve to that directory.
+    info = _parse("csharp", "DpSecure.Web", "Pages", "BatchProcessesModel.cs").info
+    assert info.imports == ["csharp.Statements.Core.Batch.BatchRepository"]
+    assert _edges("csharp/DpSecure.Web") == {
+        (
+            "csharp/DpSecure.Web/Pages/BatchProcessesModel.cs",
+            "csharp/Statements.Core/Batch/BatchRepository.cs",
+        )
     }
 
 

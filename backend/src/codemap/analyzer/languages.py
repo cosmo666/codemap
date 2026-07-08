@@ -182,6 +182,17 @@ def _resolve_dotted(
     """Map a dotted/namespaced import onto source paths, longest prefix first,
     trying every ancestor directory of the importing file as a source root.
 
+    For each length of the (possibly truncated) namespace, also tries
+    collapsing a leading run of segments into ONE literal dotted folder name
+    before resuming normal per-segment nesting for the remainder. This is the
+    common convention in .NET (and occasionally Java/PHP): a project's root
+    namespace becomes a single folder whose name contains literal dots (e.g.
+    "Statements.Core/Batch/…" for `using Statements.Core.Batch;`), not nested
+    "Statements/Core/Batch/…" directories as Java's package convention would
+    assume. Trying the smallest collapse first (k=1) reproduces the original
+    fully-nested behavior exactly, so existing nested-convention resolution is
+    unaffected.
+
     A file hit wins; a directory hit (package/namespace import) fans out to
     every source file directly inside it. strip_root additionally probes with
     the leading segment removed (root namespaces that do not exist on disk).
@@ -194,16 +205,20 @@ def _resolve_dotted(
     for ancestor in _ancestor_dirs(repo, file):
         for variant in variants:
             for end in range(len(variant), 0, -1):
-                base = ancestor.joinpath(*variant[:end])
-                candidate = base.with_name(base.name + ext)
-                if candidate.is_file() and _within_repo(repo, candidate):
-                    return [candidate]
-                if base.is_dir() and _within_repo(repo, base):
-                    hits = sorted(
-                        p for p in base.iterdir() if p.is_file() and p.suffix == ext
+                truncated = variant[:end]
+                for collapse in range(1, len(truncated) + 1):
+                    base = ancestor.joinpath(
+                        ".".join(truncated[:collapse]), *truncated[collapse:]
                     )
-                    if hits:
-                        return hits
+                    candidate = base.with_name(base.name + ext)
+                    if candidate.is_file() and _within_repo(repo, candidate):
+                        return [candidate]
+                    if base.is_dir() and _within_repo(repo, base):
+                        hits = sorted(
+                            p for p in base.iterdir() if p.is_file() and p.suffix == ext
+                        )
+                        if hits:
+                            return hits
     return []
 
 

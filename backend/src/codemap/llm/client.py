@@ -1,5 +1,6 @@
 import asyncio
 from collections.abc import AsyncIterator
+from typing import Any
 
 import openai
 import structlog
@@ -26,25 +27,30 @@ class LLMClient:
         self._retry_delay = settings.retry_delay
         self._semaphore = asyncio.Semaphore(settings.max_concurrency)
 
+    async def _create_with_retry(self, messages: list[ChatMessage], *, stream: bool) -> Any:
+        """Retry the INITIAL request only - once a stream starts yielding tokens,
+        retrying would duplicate or corrupt output already sent to the caller."""
+        for attempt in range(_MAX_RETRIES + 1):
+            try:
+                return await self._client.chat.completions.create(
+                    model=self._model, messages=messages, stream=stream  # type: ignore[arg-type]
+                )
+            except _RETRYABLE as exc:
+                if attempt == _MAX_RETRIES:
+                    raise
+                delay = self._retry_delay * 2**attempt
+                log.warning("llm_retry", attempt=attempt, delay=delay, error=str(exc))
+                await asyncio.sleep(delay)
+        raise RuntimeError("unreachable")
+
     async def complete(self, system: str, user: str) -> str:
         messages: list[ChatMessage] = [
             {"role": "system", "content": system},
             {"role": "user", "content": user},
         ]
         async with self._semaphore:
-            for attempt in range(_MAX_RETRIES + 1):
-                try:
-                    response = await self._client.chat.completions.create(
-                        model=self._model, messages=messages  # type: ignore[arg-type]
-                    )
-                    return response.choices[0].message.content or ""
-                except _RETRYABLE as exc:
-                    if attempt == _MAX_RETRIES:
-                        raise
-                    delay = self._retry_delay * 2**attempt
-                    log.warning("llm_retry", attempt=attempt, delay=delay, error=str(exc))
-                    await asyncio.sleep(delay)
-        raise RuntimeError("unreachable")
+            response = await self._create_with_retry(messages, stream=False)
+            return response.choices[0].message.content or ""
 
     async def stream(
         self, system: str, user: str, history: list[ChatMessage] | None = None
@@ -53,10 +59,8 @@ class LLMClient:
         messages.extend(history or [])
         messages.append({"role": "user", "content": user})
         async with self._semaphore:
-            response = await self._client.chat.completions.create(
-                model=self._model, messages=messages, stream=True  # type: ignore[arg-type]
-            )
-            async for chunk in response:  # type: ignore[union-attr]
+            response = await self._create_with_retry(messages, stream=True)
+            async for chunk in response:
                 delta = chunk.choices[0].delta.content if chunk.choices else None
                 if delta:
                     yield delta

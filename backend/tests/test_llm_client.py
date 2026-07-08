@@ -110,3 +110,49 @@ async def test_stream_includes_history_in_request() -> None:
         {"role": "user", "content": "user"},
     ]
     assert fake.last_kwargs["stream"] is True
+
+
+class FlakyStreamCompletions(FakeStreamCompletions):
+    """create() raises the given errors (in order) before finally streaming deltas."""
+
+    def __init__(self, errors: list[Exception], deltas: list[str | None]) -> None:
+        super().__init__(deltas)
+        self.errors = list(errors)
+
+    async def create(self, **kwargs: Any) -> Any:
+        self.calls += 1
+        self.last_kwargs = kwargs
+        if self.errors:
+            raise self.errors.pop(0)
+        deltas = self.deltas
+
+        async def gen() -> Any:
+            for delta in deltas:
+                yield SimpleNamespace(
+                    choices=[SimpleNamespace(delta=SimpleNamespace(content=delta))]
+                )
+
+        return gen()
+
+
+async def test_stream_retries_initial_request_on_rate_limit() -> None:
+    # A rate limit hits before any token is produced (the initial request itself
+    # 402/429s) - this must retry exactly like complete() does, not fail instantly.
+    fake = FlakyStreamCompletions([FakeRateLimit(), FakeRateLimit()], ["ok"])
+    inner = SimpleNamespace(chat=SimpleNamespace(completions=fake))
+    client = LLMClient(make_settings(), client=inner)  # type: ignore[arg-type]
+    chunks = [chunk async for chunk in client.stream("sys", "user")]
+    assert chunks == ["ok"]
+    assert fake.calls == 3
+
+
+async def test_stream_gives_up_after_retries() -> None:
+    fake = FlakyStreamCompletions(
+        [FakeRateLimit(), FakeRateLimit(), FakeRateLimit(), FakeRateLimit()], ["ok"]
+    )
+    inner = SimpleNamespace(chat=SimpleNamespace(completions=fake))
+    client = LLMClient(make_settings(), client=inner)  # type: ignore[arg-type]
+    with pytest.raises(openai.RateLimitError):
+        async for _ in client.stream("sys", "user"):
+            pass
+    assert fake.calls == 4

@@ -39,6 +39,8 @@ def test_discover_source_files_polyglot() -> None:
             "cpp/widget.h",
             "csharp/Acme/App/Program.cs",
             "csharp/Acme/Util/Strings.cs",
+            "csharp/DpSecure.Web/Pages/BatchProcessesModel.cs",
+            "csharp/Statements.Core/Batch/BatchRepository.cs",
             "go/go.mod",  # unregistered-but-texty: raw-fallback node
             "go/main.go",
             "go/util/count.go",
@@ -185,7 +187,7 @@ def test_grammar_load_failure_raw_fallback_for_universal_tier(
 def test_polyglot_graph_edges_exact() -> None:
     graph = build_graph(parse_repo(POLYGLOT))
     by_id = {n.id: n for n in graph.nodes}
-    assert len(graph.nodes) == 27
+    assert len(graph.nodes) == 29
     assert by_id["web/api.ts"].language == "typescript"
     assert by_id["web/util.js"].language == "javascript"
     assert by_id["scripts/tool.lua"].language == "lua"
@@ -196,8 +198,8 @@ def test_polyglot_graph_edges_exact() -> None:
     assert by_id["cpp/widget.h"].status == "ok"
     assert by_id["go/go.mod"].language == "mod"  # raw-fallback node
     assert by_id["go/go.mod"].status == "ok"
-    edge_set = {(e.source, e.target) for e in graph.edges}
-    assert edge_set == {
+    import_edge_set = {(e.source, e.target) for e in graph.edges if e.kind == "import"}
+    assert import_edge_set == {
         # JS/TS
         ("web/api.ts", "web/util.js"),  # TS -> JS
         ("web/api.ts", "web/components/index.ts"),  # TS -> TS via index collapse
@@ -216,6 +218,12 @@ def test_polyglot_graph_edges_exact() -> None:
         ("rust/src/util/geometry.rs", "rust/src/helpers.rs"),
         # C#
         ("csharp/Acme/App/Program.cs", "csharp/Acme/Util/Strings.cs"),
+        # C#: dotted project-root folder (Statements.Core/) collapsed from a
+        # namespace, not nested Statements/Core/ directories
+        (
+            "csharp/DpSecure.Web/Pages/BatchProcessesModel.cs",
+            "csharp/Statements.Core/Batch/BatchRepository.cs",
+        ),
         # C / C++
         ("c/src/main.c", "c/src/util/strings.h"),
         ("c/src/util/strings.c", "c/src/util/strings.h"),
@@ -227,6 +235,12 @@ def test_polyglot_graph_edges_exact() -> None:
     }
     # universal-tier node has no edges at all
     assert not any("tool.lua" in e.source or "tool.lua" in e.target for e in graph.edges)
+    # Structural (folder-sibling) edges: main.cpp and widget.h share a folder and
+    # both depend on geometry.hpp, but never import each other directly - the
+    # spine still visually connects them, distinctly typed from real imports.
+    edge_kinds = {(e.source, e.target): e.kind for e in graph.edges}
+    assert edge_kinds[("cpp/main.cpp", "cpp/widget.h")] == "structural"
+    assert ("cpp/main.cpp", "cpp/widget.h") not in import_edge_set
 
 
 # --- backward compat ---------------------------------------------------------

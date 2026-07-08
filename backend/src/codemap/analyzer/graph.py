@@ -1,3 +1,4 @@
+from pathlib import PurePosixPath
 from typing import Literal
 
 import networkx as nx
@@ -21,6 +22,9 @@ class GraphNode(BaseModel):
 class GraphEdge(BaseModel):
     source: str
     target: str
+    # Default keeps previously persisted graph.json valid on warm start: every
+    # edge written before this field existed was a real import dependency.
+    kind: Literal["import", "structural"] = "import"
 
 
 class GraphData(BaseModel):
@@ -43,6 +47,25 @@ def _resolve_target(imported: str, by_module: dict[str, list[str]]) -> str | Non
     return None
 
 
+def _structural_edges(paths: list[str], existing: set[tuple[str, str]]) -> list[GraphEdge]:
+    """Chain files that share a parent folder into a spine (alphabetical,
+    consecutive pairs) so directory structure stays visible on the map even
+    where static analysis finds no import between them. Never duplicates a
+    pair an import edge already covers, and never feeds centrality/sizing -
+    this is a visual affordance, not a claimed dependency."""
+    by_folder: dict[str, list[str]] = {}
+    for path in paths:
+        by_folder.setdefault(str(PurePosixPath(path).parent), []).append(path)
+    edges: list[GraphEdge] = []
+    for siblings in by_folder.values():
+        siblings.sort()
+        for a, b in zip(siblings, siblings[1:], strict=False):  # deliberately unequal length
+            if (a, b) in existing or (b, a) in existing:
+                continue
+            edges.append(GraphEdge(source=a, target=b, kind="structural"))
+    return edges
+
+
 def build_graph(parsed: list[ParsedModule]) -> GraphData:
     by_module: dict[str, list[str]] = {}
     for p in parsed:
@@ -60,6 +83,7 @@ def build_graph(parsed: list[ParsedModule]) -> GraphData:
                     g.add_edge(p.info.path, target)
                     edges.append(GraphEdge(source=p.info.path, target=target))
                     seen_edges.add(edge_key)
+    edges.extend(_structural_edges([p.info.path for p in parsed], seen_edges))
     centrality: dict[str, float] = (
         nx.in_degree_centrality(g) if g.number_of_nodes() > 1 else {}
     )
