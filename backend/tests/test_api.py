@@ -248,6 +248,41 @@ async def test_analyze_events_stream_and_404s(repo: Path) -> None:
         assert (await client.get("/module/not/a/module.py")).status_code == 404
 
 
+async def test_analyze_events_stream_sends_heartbeat_during_slow_explain(
+    repo: Path,
+) -> None:
+    # A rate-limited/slow LLM call must not leave the SSE stream silent long
+    # enough for a proxy's idle-read timeout to kill it (observed in Docker
+    # behind nginx as a spurious "connection lost").
+    class SlowLLM(FakeLLM):
+        async def complete(self, system: str, user: str) -> str:
+            await asyncio.sleep(1.5)
+            return await super().complete(system, user)
+
+    llm: Any = SlowLLM()
+    pipeline = Pipeline(make_settings(), llm=llm, embed_fn=fake_embed)
+    app = create_app(settings=make_settings(), pipeline=pipeline)
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        analysis_id = (
+            await client.post("/analyze", json={"repo_path": str(repo)})
+        ).json()["analysis_id"]
+
+        saw_heartbeat = False
+        stages: list[str] = []
+        async with client.stream("GET", f"/analyze/{analysis_id}/events") as response:
+            async for line in response.aiter_lines():
+                if line.startswith(":"):
+                    saw_heartbeat = True
+                elif line.startswith("data:"):
+                    event = json.loads(line[5:].strip())
+                    stages.append(event["stage"])
+                    if event["stage"] in ("done", "error"):
+                        break
+        assert saw_heartbeat, "expected a keep-alive comment during the slow explain gap"
+        assert stages[-1] == "done"
+
+
 async def test_analyze_events_stream_closes_after_error(
     repo: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

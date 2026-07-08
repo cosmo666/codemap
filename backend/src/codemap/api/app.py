@@ -165,6 +165,12 @@ def create_app(
                 except TimeoutError:
                     if run.done:
                         break
+                    # Keep the connection alive across long LLM retry/backoff
+                    # gaps - an idle stream gets killed by proxy read timeouts
+                    # (e.g. nginx's default 60s), which the client then
+                    # reports as "connection lost" even though the analysis
+                    # is still progressing.
+                    yield {"comment": "keep-alive"}
                     continue
                 yield {"data": event.model_dump_json()}
                 if event.stage in ("done", "error"):
